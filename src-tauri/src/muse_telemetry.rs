@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
@@ -78,7 +79,15 @@ pub async fn start_muse_agent_telemetry(
         return Err("Muse telemetry bridge belum tersedia pada build ini".to_string());
     }
 
-    let mut child = Command::new(&bridge_path)
+    let mut bridge_command = Command::new(&bridge_path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // The bridge is a console executable because it uses stdin/stdout as a
+        // private pipe. Suppress a separate console window when launched by Tauri.
+        bridge_command.creation_flags(0x0800_0000);
+    }
+    let mut child = bridge_command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -137,12 +146,37 @@ pub async fn start_muse_agent_telemetry(
             }
             let _ = app_for_reader.emit("muse-agent-telemetry", event);
         }
-        if let Some(state) = app_for_reader.try_state::<MuseTelemetryState>() {
+        let bridge_was_registered = if let Some(state) = app_for_reader.try_state::<MuseTelemetryState>() {
             if let Ok(mut workers) = state.workers.lock() {
                 if let Some(mut worker) = workers.remove(&core_account_id) {
                     let _ = worker.child.wait();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if bridge_was_registered {
+            let stopped = json!({
+                "type": "status",
+                "status": "bridge_stopped",
+                "checkedAtMs": SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                "accountKey": { "providerId": "muse", "uuid": core_uuid },
+                "message": "Muse telemetry process stopped unexpectedly"
+            });
+            if let Some(state) = app_for_reader.try_state::<MuseTelemetryState>() {
+                if let Ok(mut latest) = state.latest.lock() {
+                    latest.insert(core_account_id.clone(), stopped.clone());
                 }
             }
+            let _ = app_for_reader.emit("muse-agent-telemetry", stopped);
         }
     });
 
