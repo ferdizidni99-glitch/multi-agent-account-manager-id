@@ -31,7 +31,7 @@ impl MuseTelemetryState {
     pub fn shutdown(&self) {
         if let Ok(mut workers) = self.workers.lock() {
             for (_, mut worker) in workers.drain() {
-                let _ = writeln!(worker.stdin, "{{\\"type\\":\\"stop\\"}}");
+                let _ = writeln!(worker.stdin, "{{\"type\":\"stop\"}}");
                 let _ = worker.stdin.flush();
                 let _ = worker.child.kill();
                 let _ = worker.child.wait();
