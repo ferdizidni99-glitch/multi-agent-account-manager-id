@@ -6943,7 +6943,7 @@ async function bootstrap(): Promise<void> {
       if (snapshot.activeAccount || !snapshot.switchingAccount) {
         optimisticSwitching = null;
       }
-      void syncMuseTelemetryAccounts(nextSnapshot, viewMode === "agents");
+      void syncMuseTelemetryAccounts(nextSnapshot, true);
       return;
     }
     saveScrollPosition();
