@@ -5331,10 +5331,12 @@ impl SessionManager {
     if !locked.conflicts.is_empty() {
       return Err("Selesaikan konflik UUID sebelum membaca sesi Muse".to_string());
     }
-    if !locked.store.accounts.iter().any(|account| {
-      account.provider_id == key.provider_id && account.uuid == key.uuid
-    }) {
-      return Err("Akun Muse tidak ditemukan di MAAM".to_string());
+    if locked.store.pending_cleanup.contains(&key)
+      || !locked.store.accounts.iter().any(|account| {
+        account.provider_id == key.provider_id && account.uuid == key.uuid
+      })
+    {
+      return Err("Akun Muse tidak tersedia atau sedang dihapus".to_string());
     }
     let url = Url::parse("https://muse.ai/").map_err(|_| "URL Muse tidak valid".to_string())?;
 
