@@ -39,7 +39,7 @@ function workflowLabel(group: GroupChatRecord): string {
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
-    ready: "Siap dipertimbangkan",
+    ready: "Tidak ada blocker tercatat",
     busy: "Sedang digunakan",
     blocked: "Terblokir",
     "needs-auth": "Perlu autentikasi",
@@ -95,16 +95,16 @@ export function renderSmartRouter(state: ManagerSnapshot): string {
 
   return [
     '<div class="cc-page">',
-    '<header class="cc-page-header"><div><div class="cc-eyebrow">CONTROL CENTER / RESOURCE ROUTING</div><h1>Smart Router</h1><p>Monitoring kondisi akun berdasarkan snapshot Manager yang sudah digunakan aplikasi.</p></div>',
-    '<button id="router-refresh-btn" class="btn primary" type="button">', '<span aria-hidden="true">↻</span> Sinkronkan kuota</button></header>',
+    '<header class="cc-page-header"><div><div class="cc-eyebrow">CONTROL CENTER / RESOURCE ROUTING</div><h1>Smart Router</h1><p>Diagnostik read-only berdasarkan snapshot SessionManager. Ini bukan pemeriksaan live untuk semua akun.</p></div>',
+    '<button id="router-refresh-btn" class="btn primary" type="button">', '<span aria-hidden="true">↻</span> Refresh akun WebView warm</button></header>',
     conflictNotice,
     '<section class="cc-stat-grid">',
     '<article class="cc-stat-card"><span>Total akun</span><strong>', String(summary.total), '</strong><small>Seluruh akun yang tersimpan</small></article>',
-    '<article class="cc-stat-card"><span>Siap dipertimbangkan</span><strong class="cc-number-ready">', String(summary.ready), '</strong><small>Login valid, tidak sibuk, tanpa blocker terlihat</small></article>',
+    '<article class="cc-stat-card"><span>Tidak ada blocker tercatat</span><strong class="cc-number-ready">', String(summary.ready), '</strong><small>Tidak ada blocker pada data yang tersedia</small></article>',
     '<article class="cc-stat-card"><span>Sedang digunakan</span><strong>', String(summary.busy), '</strong><small>Terlihat memiliki giliran aktif pada Group Chat</small></article>',
     '<article class="cc-stat-card"><span>Perlu perhatian</span><strong class="cc-number-alert">', String(summary.needsAuth + summary.attention + summary.blocked), '</strong><small>Autentikasi, konflik, kuota, atau error</small></article>',
     '</section>',
-    '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">ROUTING ENGINE</div><h2>Strategi otomatis yang sedang digunakan</h2></div><span class="cc-pill cc-pill-live">Backend aktif</span></div>',
+    '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">ROUTING ENGINE</div><h2>Alur routing backend yang sudah ada</h2></div><span class="cc-pill">Diputuskan SessionManager</span></div>',
     '<div class="cc-router-flow">',
     '<div class="cc-flow-step"><span>01</span><strong>Eligibility</strong><small>Provider, login, cookie, error halaman, kuota</small></div>',
     '<div class="cc-flow-arrow">→</div>',
@@ -112,7 +112,7 @@ export function renderSmartRouter(state: ManagerSnapshot): string {
     '<div class="cc-flow-arrow">→</div>',
     '<div class="cc-flow-step"><span>03</span><strong>Selection</strong><small>Prioritas kuota, pemakaian terakhir, sticky route</small></div>',
     '</div>',
-    '<p class="cc-note">Pemilihan final tetap dilakukan oleh SessionManager. Panel ini bersifat diagnostik dan tidak mengambil alih, mengunci, atau mengubah sesi akun. Cooldown serta lock internal tetap diputuskan backend saat dispatch.</p>',
+    '<p class="cc-note">Tombol refresh meminta SessionManager memverifikasi autentikasi dan memperbarui kuota melalui WebView yang sedang warm (terbuka atau berada di warm pool), bukan seluruh akun tersimpan. Hasil diperbarui secara asynchronous setelah probe selesai. Status sibuk di panel ini hanya indikatif karena lock dan reservation internal tidak diekspos ke snapshot; cooldown, lock, failover, serta pemilihan final tetap diputuskan backend.</p>',
     '</section>',
     '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">ACCOUNT RESOURCE POOL</div><h2>Kondisi akun</h2></div><span class="cc-count">', String(summary.total), ' akun</span></div>',
     accountTable,
@@ -204,7 +204,7 @@ export function renderAgentCenter(state: ManagerSnapshot): string {
     '</section>',
     '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">AGENT REGISTRY</div><h2>Agent yang sudah terdaftar</h2></div><button id="agent-manage-inline-btn" class="cc-text-action" type="button">Buka pengelola →</button></div>',
     '<div class="cc-agent-grid">', agentCards, '</div>',
-    '<p class="cc-note">Profil API / CLI menggunakan registry dan penyimpanan yang sudah ada. Akun Muse / Hark tetap dikelola di tab provider; tidak ada kredensial yang disalin ke profil baru.</p>',
+    '<p class="cc-note">Profil API / CLI di sini hanya menampilkan registry dan konfigurasi tersimpan; belum melakukan tes koneksi API/CLI. Daftar workspace adalah Group Chat yang sudah ada, bukan task scheduler baru. Akun Muse / Hark tetap dikelola di tab provider; tidak ada kredensial yang disalin ke profil baru.</p>',
     '</section>',
     '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">TEAM WORKSPACES</div><h2>Ruang kolaborasi</h2></div><span class="cc-count">', String(summary.workspaces), ' workspace</span></div>',
     '<div class="cc-workspace-grid">', workspaces, '</div>',
