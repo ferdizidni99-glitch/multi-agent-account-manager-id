@@ -254,12 +254,13 @@ export function buildAgentOfficeRoster(state: ManagerSnapshot): AgentOfficeInput
     const key = account.providerId + ":" + account.uuid;
     const latest = activity.get(key);
     const provider = state.providers.find((item) => item.id === account.providerId);
-    const loggedOut = account.authState !== "authenticated";
+    const loggedOut = account.authState === "logged_out";
+    const authUnknown = account.authState === "unknown";
     return {
       id: "account:" + key,
       name: account.alias || provider?.shortName || account.providerId,
       state: latest?.state === "running" ? "running" : loggedOut || latest?.state === "attention" ? "attention" : "idle",
-      detail: latest?.detail || (loggedOut ? "Perlu login ulang" : provider?.shortName || "Akun siap digunakan")
+      detail: latest?.detail || (loggedOut ? "Perlu login ulang" : authUnknown ? "Status login belum diverifikasi" : provider?.shortName || "Akun siap digunakan")
     };
   });
   const external = (state.externalAgents || []).map((agent): AgentOfficeInput => {
