@@ -256,10 +256,10 @@ def main() -> int:
     stopper = threading.Thread(target=read_stop_signal, args=(stop,), daemon=True)
     poller = threading.Thread(target=poll_snapshots, args=(cookies, stop), daemon=True)
     subscriber = threading.Thread(target=subscribe_task_events, args=(cookies, stop), daemon=True)
+    emit({"type": "status", "status": "starting", "checkedAtMs": int(time.time() * 1000)})
     stopper.start()
     poller.start()
     subscriber.start()
-    emit({"type": "status", "status": "starting", "checkedAtMs": int(time.time() * 1000)})
 
     try:
         while not stop.wait(0.5):
