@@ -1,5 +1,5 @@
 import type { AccountHealthResult, AccountRecord, AgentConnectionTestResult, ExternalAgentRecord, GroupChatMessage, GroupChatRecord, ManagerSnapshot } from "../types";
-import { assessAccount, summarizeAgentCenter, summarizeRouter } from "./control-center-core.mjs";
+import { assessAccount, summarizeRouter } from "./control-center-core.mjs";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -225,39 +225,110 @@ function renderActivity(state: ManagerSnapshot): string {
   }).join("") + '</div>';
 }
 
+export interface AgentOfficeInput {
+  id: string;
+  name: string;
+  state: "running" | "attention" | "idle";
+  detail: string;
+}
+
+export function buildAgentOfficeRoster(state: ManagerSnapshot): AgentOfficeInput[] {
+  const activity = new Map<string, { state: AgentOfficeInput["state"]; detail: string; at: number }>();
+  for (const group of state.groupChats) {
+    for (const message of group.messages) {
+      if (!message.sender) continue;
+      const key = message.sender.providerId + ":" + message.sender.uuid;
+      const at = message.createdAtMs || 0;
+      const running = message.status === "queued" || message.status === "sending" || message.status === "streaming";
+      const attention = message.status === "error" || message.status === "needs_auth";
+      const previous = activity.get(key);
+      if (previous && previous.at > at) continue;
+      activity.set(key, {
+        state: running ? "running" : attention ? "attention" : "idle",
+        detail: message.stageLabel || (message.error ? message.error.slice(0, 100) : group.name),
+        at
+      });
+    }
+  }
+  const accounts = state.accounts.map((account): AgentOfficeInput => {
+    const key = account.providerId + ":" + account.uuid;
+    const latest = activity.get(key);
+    const provider = state.providers.find((item) => item.id === account.providerId);
+    const loggedOut = account.authState !== "authenticated";
+    return {
+      id: "account:" + key,
+      name: account.alias || provider?.shortName || account.providerId,
+      state: latest?.state === "running" ? "running" : loggedOut || latest?.state === "attention" ? "attention" : "idle",
+      detail: latest?.detail || (loggedOut ? "Perlu login ulang" : provider?.shortName || "Akun siap digunakan")
+    };
+  });
+  const external = (state.externalAgents || []).map((agent): AgentOfficeInput => {
+    const providerId = agent.kind === "openai_api" ? "api" : "cli";
+    const key = providerId + ":" + agent.id;
+    const latest = activity.get(key);
+    return {
+      id: "external:" + key,
+      name: agent.name,
+      state: latest?.state || "idle",
+      detail: latest?.detail || (agent.kind === "openai_api" ? agent.model || "API agent" : agent.command || "CLI agent")
+    };
+  });
+  return [...accounts, ...external];
+}
+
 export function renderAgentCenter(
   state: ManagerSnapshot,
   connectionResults: Record<string, AgentConnectionTestResult> = {}
 ): string {
-  const summary = summarizeAgentCenter(state);
+  const agents = buildAgentOfficeRoster(state);
+  const running = agents.filter((agent) => agent.state === "running").length;
+  const attention = agents.filter((agent) => agent.state === "attention").length;
   const externalAgents = state.externalAgents || [];
   const agentCards = externalAgents.length
     ? externalAgents.map((agent) => renderAgentCard(agent, connectionResults[agent.id])).join("")
-    : '<div class="cc-empty">Belum ada API / CLI agent. Tambahkan lewat pengelola agent yang sudah ada.</div>';
+    : '<div class="cc-empty">Belum ada koneksi eksternal. Akun Muse dan provider web tetap tampil sebagai agent.</div>';
   const workspaces = state.groupChats.length
     ? state.groupChats.map(renderWorkspaceCard).join("")
-    : '<div class="cc-empty">Belum ada workspace. Buat workspace untuk menggabungkan akun web, API, dan CLI.</div>';
+    : '<div class="cc-empty">Belum ada workspace. Buat workspace untuk menggabungkan akun yang tersedia.</div>';
+  const rosterHtml = agents.length
+    ? agents.map((agent) => [
+        '<div class="agent-office-roster-row">',
+        '<span class="agent-office-presence ', agent.state, '"></span>',
+        '<div class="agent-office-roster-meta"><strong>', escapeHtml(agent.name), '</strong>',
+        '<span>', escapeHtml(agent.detail), '</span></div>',
+        '<span class="agent-office-roster-state ', agent.state, '">', agent.state === "running" ? "Bekerja" : agent.state === "attention" ? "Perhatian" : "Siaga", '</span>',
+        '</div>'
+      ].join("")).join("")
+    : '<div class="cc-empty">Tambahkan akun provider untuk mengisi kantor agent.</div>';
 
   return [
-    '<div class="cc-page">',
-    '<header class="cc-page-header"><div><div class="cc-eyebrow">CONTROL CENTER / MULTI-AGENT OPERATIONS</div><h1>Agent Center</h1><p>Satu tempat untuk mengelola agent, tim kolaborasi, dan aktivitas eksekusi yang sudah tersedia.</p></div>',
-    '<div class="cc-header-actions"><button id="agent-manage-btn" class="btn" type="button">Kelola agent</button><button id="agent-create-workspace-btn" class="btn primary" type="button">+ Workspace baru</button></div></header>',
-    '<section class="cc-stat-grid cc-stat-grid-five">',
-    '<article class="cc-stat-card"><span>Agent API / CLI</span><strong>', String(summary.externalAgents), '</strong><small>Profil eksternal terdaftar</small></article>',
-    '<article class="cc-stat-card"><span>Akun web</span><strong>', String(summary.webAccounts), '</strong><small>Resource Muse / provider</small></article>',
-    '<article class="cc-stat-card"><span>Workspace</span><strong>', String(summary.workspaces), '</strong><small>Group Chat yang dapat dipakai ulang</small></article>',
-    '<article class="cc-stat-card"><span>Giliran aktif</span><strong>', String(summary.runningTurns), '</strong><small>Queued, sending, streaming</small></article>',
-    '<article class="cc-stat-card"><span>Hasil / error</span><strong>', String(summary.completedTurns), '<small>', String(summary.failedTurns), ' perlu perhatian</small></strong><small>Riwayat dari pesan agent</small></article>',
+    '<div class="agent-office-page">',
+    '<header class="agent-office-header"><div><div class="cc-eyebrow">叠号 / MULTI-AGENT WORKSPACE</div><h1>Agent Office</h1><p>Pantau agent dari akun yang tersimpan dan aktivitas kerja di workspace MAAM.</p></div>',
+    '<div class="cc-header-actions"><button id="agent-manage-btn" class="btn" type="button">Kelola koneksi</button><button id="agent-create-workspace-btn" class="btn primary" type="button">+ Workspace</button></div></header>',
+    '<section class="agent-office-stats">',
+    '<article><span>Total agent</span><strong>', String(agents.length), '</strong><small>Akun web + koneksi eksternal</small></article>',
+    '<article><span>Sedang bekerja</span><strong class="is-running">', String(running), '</strong><small>Aktivitas aktif di Group Chat</small></article>',
+    '<article><span>Perlu perhatian</span><strong class="is-attention">', String(attention), '</strong><small>Login atau pesan bermasalah</small></article>',
+    '<article><span>Workspace</span><strong>', String(state.groupChats.length), '</strong><small>Ruang kolaborasi tersimpan</small></article>',
     '</section>',
-    '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">AGENT REGISTRY</div><h2>Agent yang sudah terdaftar</h2></div><button id="agent-manage-inline-btn" class="cc-text-action" type="button">Buka pengelola →</button></div>',
+    '<div class="agent-office-layout">',
+    '<section class="agent-office-scene-panel">',
+    '<div class="agent-office-scene-heading"><div><span class="cc-eyebrow">LIVE SIMULATION</span><h2>MAAM virtual office</h2></div><span class="agent-office-live-indicator"><i></i> LIVE</span></div>',
+    '<div class="agent-office-canvas-wrap"><canvas id="agent-office-canvas" aria-label="Animasi kantor virtual agent"></canvas><div class="agent-office-canvas-shade"></div></div>',
+    '<div class="agent-office-scene-footer"><span id="agent-office-render-status">Menginisialisasi mesin visual Pixtuoid…</span><span>Pixtuoid scene engine</span></div>',
+    '</section>',
+    '<aside class="agent-office-side-panel">',
+    '<div class="agent-office-side-heading"><div><span class="cc-eyebrow">AGENT ROSTER</span><h2>Rekan kerja</h2></div><span class="cc-count">', String(agents.length), '</span></div>',
+    '<div class="agent-office-roster">', rosterHtml, '</div>',
+    '<div class="agent-office-side-heading agent-office-activity-heading"><div><span class="cc-eyebrow">LATEST SIGNALS</span><h2>Aktivitas terbaru</h2></div></div>',
+    '<div class="agent-office-activity">', renderActivity(state), '</div>',
+    '</aside>',
+    '</div>',
+    '<section class="agent-office-bottom-panel"><div class="agent-office-bottom-heading"><div><span class="cc-eyebrow">TEAM SPACES</span><h2>Workspace</h2></div><span class="cc-count">', String(state.groupChats.length), ' ruang</span></div>',
+    '<div class="cc-workspace-grid">', workspaces, '</div></section>',
+    '<section class="agent-office-bottom-panel"><div class="agent-office-bottom-heading"><div><span class="cc-eyebrow">CONNECTED RUNTIMES</span><h2>Koneksi API / CLI</h2></div><button id="agent-manage-inline-btn" class="cc-text-action" type="button">Kelola →</button></div>',
     '<div class="cc-agent-grid">', agentCards, '</div>',
-    '<p class="cc-note">Tes API mengirim GET ke endpoint /models memakai API key tersimpan bila tersedia; ini menguji endpoint dan autentikasi, bukan menjalankan inferensi. Tes CLI menjalankan executable dengan argumen --version; ini memastikan program dapat dijalankan, bukan memverifikasi login provider. Workspace tetap memakai Group Chat yang sudah ada, bukan task scheduler baru.</p>',
-    '</section>',
-    '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">TEAM WORKSPACES</div><h2>Ruang kolaborasi</h2></div><span class="cc-count">', String(summary.workspaces), ' workspace</span></div>',
-    '<div class="cc-workspace-grid">', workspaces, '</div>',
-    '</section>',
-    '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">EXECUTION ACTIVITY</div><h2>Aktivitas terbaru</h2></div></div>',
-    renderActivity(state),
+    '<p class="cc-note">Status sprite mengikuti aktivitas Group Chat yang tercatat di MAAM. Simulasi kantor hanya memvisualisasikan event yang dikirim aplikasi; tidak mengubah sesi, cookie, atau keputusan routing akun.</p>',
     '</section>',
     '</div>'
   ].join("");
