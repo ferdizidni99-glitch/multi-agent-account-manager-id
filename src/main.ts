@@ -5,6 +5,7 @@ import { renderAgentCenter, renderSmartRouter } from "./features/control-center"
 import type {
   AccountKey,
   AccountRecord,
+  AgentConnectionTestResult,
   DownloadNoticeEvent,
   ExternalAgentKind,
   ExternalAgentRecord,
@@ -232,6 +233,7 @@ const ICON_PIN = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" st
 const ICON_SYNC = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`;
 const ICON_QR_SCAN = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" x2="17" y1="12" y2="12"/></svg>`;
 const syncingMsgIds = new Set<string>();
+let agentConnectionResults: Record<string, AgentConnectionTestResult> = {};
 
 const THEME_STORAGE_KEY = "maam_theme_mode";
 const systemDarkQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -4363,7 +4365,7 @@ function render(): void {
           </div>
         </aside>
         ${isControlView
-          ? `<main class="control-center-shell">${viewMode === "router" ? renderSmartRouter(snapshot) : renderAgentCenter(snapshot)}</main>`
+          ? `<main class="control-center-shell">${viewMode === "router" ? renderSmartRouter(snapshot) : renderAgentCenter(snapshot, agentConnectionResults)}</main>`
           : `<section class="middle-column">
               ${isGroupsView ? renderGroupMiddleContent(snapshot, provider) : renderMiddleContent(snapshot, provider)}
             </section>
@@ -4461,6 +4463,30 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
         return;
       }
       await callCommand("select_group_chat", { groupId });
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-test-ext-agent-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const agentId = btn.dataset.testExtAgentId;
+      if (!agentId || btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = "Menguji…";
+      try {
+        const result = await invoke<AgentConnectionTestResult>("test_external_agent_connection", { agentId });
+        agentConnectionResults[agentId] = result;
+      } catch (error) {
+        agentConnectionResults[agentId] = {
+          id: agentId,
+          status: "error",
+          checkedAtMs: Date.now(),
+          latencyMs: 0,
+          statusCode: null,
+          message: String(error)
+        };
+      } finally {
+        rerenderPreservingScroll();
+      }
     });
   });
 
