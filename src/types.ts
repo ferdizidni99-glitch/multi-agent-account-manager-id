@@ -223,6 +223,8 @@ export interface MuseAgentTelemetry {
   schedules?: MuseTelemetrySchedule[];
   runs?: MuseTelemetryRun[];
   recentEvent?: Record<string, string | number>;
+  event?: Record<string, string | number>;
+  subscriptionStatus?: string;
 }
 
 export interface ManagerSnapshot {
