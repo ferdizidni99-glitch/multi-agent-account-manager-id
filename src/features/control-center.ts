@@ -286,7 +286,11 @@ export function buildAgentOfficeRoster(
       ? recentEvent.event_name.toLowerCase()
       : typeof recentEvent?.eventName === "string"
         ? recentEvent.eventName.toLowerCase()
-        : "";
+        : typeof recentEvent?.event === "string"
+          ? recentEvent.event.toLowerCase()
+          : typeof recentEvent?.type === "string"
+            ? recentEvent.type.toLowerCase()
+            : "";
     const recentEventJobId = typeof recentEvent?.job_id === "string"
       ? recentEvent.job_id
       : typeof recentEvent?.jobId === "string"
