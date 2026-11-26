@@ -1,4 +1,5 @@
 mod group_transport;
+mod agent_office;
 mod platform;
 mod providers;
 mod session_manager;
@@ -657,6 +658,7 @@ pub fn run() {
       let app_data_dir = app.path().app_data_dir()?;
       let session_mgr = Arc::new(SessionManager::new(app_data_dir));
       app.manage(Arc::clone(&session_mgr));
+      app.manage(agent_office::AgentOfficeState::default());
 
       #[cfg(desktop)]
       {
@@ -818,6 +820,7 @@ pub fn run() {
       stop_lan_sync_share,
       pull_lan_sync_share,
       scan_sync_qr_code,
+      agent_office::render_agent_office_frame,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")
