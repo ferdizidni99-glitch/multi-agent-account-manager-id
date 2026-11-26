@@ -7091,6 +7091,7 @@ async function bootstrap(): Promise<void> {
   snapshot = await invoke<ManagerSnapshot>("get_manager_state");
   syncViewModeFromSnapshot(snapshot);
   render();
+  void syncMuseTelemetryAccounts(snapshot, true);
   setTimeout(() => {
     void runCheckForUpdates(true);
   }, 3000);
