@@ -111,7 +111,7 @@ def sanitize_task_event(raw: bytes) -> dict[str, Any] | None:
                 result[key] = value
     if not result:
         return None
-    return {"type": "task_event", "receivedAtMs": int(time.time() * 1000), "event": result}
+    return {"type": "task_event", "status": "connected", "checkedAtMs": int(time.time() * 1000), "event": result}
 
 
 def read_stop_signal(stop: threading.Event) -> None:
@@ -167,7 +167,8 @@ def poll_snapshots(cookies: str, stop: threading.Event) -> None:
             })
             stop.wait(30)
         except GatewayError as exc:
-            status = "unavailable" if getattr(exc, "status", 0) < 500 else "attention"
+            code = getattr(exc, "status", 0)
+            status = "needs_auth" if code in (401, 403) else "attention" if code == 429 or code >= 500 else "unavailable"
             emit({
                 "type": "status",
                 "status": status,
