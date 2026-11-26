@@ -236,7 +236,10 @@ mod tests {
         assert!(runtime.agents.is_empty());
 
         let _ = runtime.office.step(now_ms + 4_000.0, 900, 520);
-        assert!(runtime.office.frame_len() > 0);
+        let (frame_width, frame_height) = runtime.office.frame_size(900, 520);
+        let expected_len = usize::from(frame_width) * usize::from(frame_height) * 4;
+        assert_eq!(runtime.office.frame_len(), expected_len);
+        assert!(expected_len > 0);
     }
 
     #[test]
