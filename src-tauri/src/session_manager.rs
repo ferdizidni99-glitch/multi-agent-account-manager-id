@@ -115,6 +115,13 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
       inflight: false
     };
     window.__maamAuthCheck = authCheck;
+    const healthCheck = window.__maamHealthCheck || {
+      status: 'unknown',
+      reason: '',
+      checkedAt: 0,
+      startedAt: 0
+    };
+    window.__maamHealthCheck = healthCheck;
     const pageErrors = window.__maamPageErrors || [];
     window.__maamPageErrors = pageErrors;
     const pushPageErr = (kind, raw) => {
@@ -153,6 +160,9 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
       authCheck.status = 'invalid';
       authCheck.reason = String(reason || 'unauthorized');
       authCheck.checkedAt = Date.now();
+      healthCheck.status = 'invalid';
+      healthCheck.reason = authCheck.reason;
+      healthCheck.checkedAt = authCheck.checkedAt;
       window.__maamQuota = null;
       window.__maamQuotaDetail = null;
       try {
@@ -164,6 +174,9 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
       authCheck.status = 'ok';
       authCheck.reason = '';
       authCheck.checkedAt = Date.now();
+      healthCheck.status = 'ok';
+      healthCheck.reason = '';
+      healthCheck.checkedAt = authCheck.checkedAt;
     };
     const BAD_EMAIL_RE = /^(?:support|privacy|help|legal|press|noreply|no-reply|info|security|contact|abuse|feedback|sales|terms|hello|team|admin|postmaster|notifications)@/i;
     const EMAIL_STRICT_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
@@ -472,6 +485,10 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
       const fetchFn = typeof origFetch === 'function' ? origFetch : window.fetch;
       if (typeof fetchFn !== 'function') return;
       authCheck.inflight = true;
+      healthCheck.status = 'checking';
+      healthCheck.reason = '';
+      healthCheck.checkedAt = 0;
+      healthCheck.startedAt = now;
       try {
         if (curHost === 'muse.ai' || curHost.endsWith('.muse.ai')) {
           const r1 = await fetchFn.call(window, '/api/client-version', {
@@ -501,7 +518,10 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
               return;
             }
           }
-          authCheck.checkedAt = Date.now();
+          healthCheck.status = 'error';
+          healthCheck.reason = 'unexpected_muse_auth_response';
+          healthCheck.checkedAt = Date.now();
+          authCheck.checkedAt = healthCheck.checkedAt;
           return;
         }
         if (curHost === 'app.hark.com' || curHost.endsWith('.hark.com')) {
@@ -519,10 +539,16 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
             markAuthOk();
             return;
           }
-          authCheck.checkedAt = Date.now();
+          healthCheck.status = 'error';
+          healthCheck.reason = 'unexpected_hark_auth_response';
+          healthCheck.checkedAt = Date.now();
+          authCheck.checkedAt = healthCheck.checkedAt;
         }
       } catch (_) {
-        authCheck.checkedAt = Date.now();
+        healthCheck.status = 'error';
+        healthCheck.reason = 'network_or_probe_error';
+        healthCheck.checkedAt = Date.now();
+        authCheck.checkedAt = healthCheck.checkedAt;
       } finally {
         authCheck.inflight = false;
       }
@@ -3784,6 +3810,29 @@ pub struct AccountPageError {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AccountHealthResult {
+  pub provider_id: ProviderId,
+  pub uuid: String,
+  pub status: String,
+  pub checked_at_ms: Option<u64>,
+  pub auth_verified: bool,
+  pub quota_verified: bool,
+  pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConnectionTestResult {
+  pub id: String,
+  pub status: String,
+  pub checked_at_ms: u64,
+  pub latency_ms: u64,
+  pub status_code: Option<u16>,
+  pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ManagerSnapshot {
   pub platform: &'static str,
   pub providers: Vec<ProviderInfo>,
@@ -3804,6 +3853,7 @@ pub struct ManagerSnapshot {
   pub active_group_id: Option<String>,
   pub external_agents: Vec<ExternalAgentRecord>,
   pub account_errors: Vec<AccountPageError>,
+  pub account_health: Vec<AccountHealthResult>,
   pub official_relay_url: Option<String>,
 }
 
@@ -4020,6 +4070,7 @@ struct InnerState {
   #[cfg_attr(not(desktop), allow(dead_code))]
   account_cooldown_until_ms: HashMap<AccountKey, u64>,
   account_page_errors: HashMap<AccountKey, String>,
+  account_health: HashMap<AccountKey, AccountHealthResult>,
   cookie_identity_hints: HashMap<AccountKey, String>,
   pending_external_auth: Option<PendingExternalAuth>,
   notice: Option<String>,
@@ -4114,6 +4165,7 @@ impl SessionManager {
         account_last_assigned_ms: HashMap::new(),
         account_cooldown_until_ms: HashMap::new(),
         account_page_errors: HashMap::new(),
+        account_health: HashMap::new(),
         cookie_identity_hints: HashMap::new(),
         pending_external_auth: None,
         notice: loaded.startup_notice,
@@ -4200,6 +4252,26 @@ impl SessionManager {
         message: msg.clone(),
       })
       .collect::<Vec<_>>();
+    let account_health = locked
+      .store
+      .accounts
+      .iter()
+      .map(|account| {
+        let key = AccountKey {
+          provider_id: account.provider_id.clone(),
+          uuid: account.uuid.clone(),
+        };
+        locked.account_health.get(&key).cloned().unwrap_or_else(|| AccountHealthResult {
+          provider_id: key.provider_id,
+          uuid: key.uuid,
+          status: "not_checked".to_string(),
+          checked_at_ms: None,
+          auth_verified: false,
+          quota_verified: false,
+          message: "Belum diperiksa secara live; akun belum memiliki WebView warm".to_string(),
+        })
+      })
+      .collect::<Vec<_>>();
 
     ManagerSnapshot {
       platform: current_platform_name(),
@@ -4221,6 +4293,7 @@ impl SessionManager {
       active_group_id: locked.active_group_id.clone(),
       external_agents: locked.store.external_agents.clone(),
       account_errors,
+      account_health,
       official_relay_url: crate::sync_bundle::official_relay_url(),
     }
   }
@@ -6870,12 +6943,27 @@ impl SessionManager {
           locked.prewarm_failed.clear();
         }
         let active_key = locked.active_slot.as_ref().map(|s| s.account_key.clone());
-        locked
+        let targets = locked
           .warm_pool
           .iter()
           .filter(|(k, _)| force || !isolate_same_proxy || active_key.as_ref() == Some(*k))
           .map(|(k, v)| (k.clone(), v.webview_label.clone(), v.view_instance_id))
-          .collect::<Vec<_>>()
+          .collect::<Vec<_>>();
+        for (key, _, _) in &targets {
+          locked.account_health.insert(key.clone(), AccountHealthResult {
+            provider_id: key.provider_id.clone(),
+            uuid: key.uuid.clone(),
+            status: "checking".to_string(),
+            checked_at_ms: None,
+            auth_verified: false,
+            quota_verified: false,
+            message: "Menjalankan verifikasi endpoint autentikasi dan pembaruan kuota".to_string(),
+          });
+        }
+        let snap = Self::snapshot_from_locked(&locked);
+        drop(locked);
+        self.emit_snapshot(app, &snap);
+        targets
       };
 
       #[cfg(target_os = "macos")]
@@ -6886,6 +6974,7 @@ impl SessionManager {
           tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
         }
         if let Some(wv) = app.get_webview(&wv_label) {
+          let started_at_ms = now_ms();
           let _ = wv.eval(r#"(() => {
             try {
               if (typeof window.__maamVerifySession === 'function') {
@@ -6901,7 +6990,11 @@ impl SessionManager {
           let app_handle = app.clone();
           tauri::async_runtime::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(850)).await;
-            if let Some(probe) = Self::eval_identity_probe(&wv).await {
+            let live_health = Self::eval_live_health_probe(&wv, started_at_ms).await;
+            let probe = Self::eval_identity_probe(&wv).await;
+            let dom_logged_out = probe.as_ref().is_some_and(|p| p.logged_out);
+            let dom_page_error = probe.as_ref().is_some_and(|p| !p.page_error.is_empty());
+            if let Some(probe) = probe {
               if probe.is_auth {
                 let resolved_identity = if !probe.email.is_empty() {
                   Some(probe.email)
@@ -6938,7 +7031,7 @@ impl SessionManager {
                   )
                   .await;
                 mgr
-                  .refresh_account_cookie_expiry(&app_handle, key, force || just_authenticated)
+                  .refresh_account_cookie_expiry(&app_handle, key.clone(), force || just_authenticated)
                   .await;
               } else if probe.logged_out {
                 mgr.apply_logged_out_state(&app_handle, key.clone(), vid).await;
@@ -6955,9 +7048,92 @@ impl SessionManager {
                 }
               } else if !probe.page_error.is_empty() {
                 mgr
-                  .apply_page_error_state(&app_handle, key, vid, probe.page_error)
+                  .apply_page_error_state(&app_handle, key.clone(), vid, probe.page_error)
                   .await;
               }
+            }
+
+            let (status, auth_verified, quota_verified, message, checked_at_ms) =
+              match live_health {
+                Some((auth_status, auth_reason, auth_checked_at, quota_recent))
+                  if auth_status == "ok" && auth_checked_at >= started_at_ms =>
+                {
+                  (
+                    "healthy".to_string(),
+                    true,
+                    quota_recent,
+                    if quota_recent {
+                      "Endpoint autentikasi berhasil diverifikasi; kuota juga berhasil diperbarui".to_string()
+                    } else {
+                      "Token berhasil diverifikasi, tetapi refresh kuota belum terkonfirmasi".to_string()
+                    },
+                    Some(auth_checked_at),
+                  )
+                }
+                Some((auth_status, auth_reason, auth_checked_at, _quota_recent))
+                  if auth_status == "invalid" && auth_checked_at >= started_at_ms =>
+                {
+                  (
+                    "needs_auth".to_string(),
+                    false,
+                    false,
+                    format!("Endpoint autentikasi menolak sesi ({auth_reason}); login ulang diperlukan"),
+                    Some(auth_checked_at),
+                  )
+                }
+                Some((auth_status, auth_reason, auth_checked_at, _))
+                  if auth_status == "error" && auth_checked_at >= started_at_ms =>
+                {
+                  (
+                    "attention".to_string(),
+                    false,
+                    false,
+                    format!("Pemeriksaan autentikasi gagal ({auth_reason}); token belum dapat dipastikan"),
+                    Some(auth_checked_at),
+                  )
+                }
+                _ if dom_logged_out => (
+                  "needs_auth".to_string(),
+                  false,
+                  false,
+                  "Halaman akun mendeteksi sesi sudah keluar; login ulang diperlukan".to_string(),
+                  Some(now_ms()),
+                ),
+                _ if dom_page_error => (
+                  "attention".to_string(),
+                  false,
+                  false,
+                  "Halaman akun bermasalah; endpoint autentikasi belum dapat diverifikasi".to_string(),
+                  Some(now_ms()),
+                ),
+                _ => (
+                  "unverified".to_string(),
+                  false,
+                  false,
+                  "WebView merespons, tetapi belum ada hasil autentikasi live yang dapat dipastikan".to_string(),
+                  Some(now_ms()),
+                ),
+              };
+
+            let health_snap = {
+              let mut locked = mgr.inner.lock().await;
+              if Self::is_view_instance_valid(&locked, &key, vid) {
+                locked.account_health.insert(key.clone(), AccountHealthResult {
+                  provider_id: key.provider_id.clone(),
+                  uuid: key.uuid.clone(),
+                  status,
+                  checked_at_ms,
+                  auth_verified,
+                  quota_verified,
+                  message,
+                });
+                Some(Self::snapshot_from_locked(&locked))
+              } else {
+                None
+              }
+            };
+            if let Some(snap) = health_snap {
+              mgr.emit_snapshot(&app_handle, &snap);
             }
           });
         }
@@ -9390,6 +9566,51 @@ impl SessionManager {
   }
 
   #[cfg(desktop)]
+  async fn eval_live_health_probe(
+    webview: &tauri::Webview,
+    started_at_ms: u64,
+  ) -> Option<(String, String, u64, bool)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+      let script = r#"(() => {
+        const health = window.__maamHealthCheck || {};
+        const checkedAt = Number(health.checkedAt || 0);
+        const quotaFetchedAt = Number(window.__maamQuotaFetchedAt || 0);
+        return JSON.stringify({
+          status: String(health.status || 'unknown'),
+          reason: String(health.reason || ''),
+          checkedAt,
+          quotaRecent: quotaFetchedAt >= STARTED_AT
+        });
+      })()"#.replace("STARTED_AT", &started_at_ms.to_string());
+      let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+      let tx_cell = Arc::new(std::sync::Mutex::new(Some(tx)));
+      let tx_inner = Arc::clone(&tx_cell);
+      webview
+        .eval_with_callback(&script, move |raw| {
+          if let Some(sender) = tx_inner.lock().unwrap().take() {
+            let _ = sender.send(raw);
+          }
+        })
+        .ok()?;
+      let raw = tokio::time::timeout(std::time::Duration::from_millis(1400), rx)
+        .await
+        .ok()?
+        .ok()?;
+      let inner_json = serde_json::from_str::<String>(&raw).unwrap_or(raw);
+      let val = serde_json::from_str::<serde_json::Value>(&inner_json).ok()?;
+      let status = val.get("status")?.as_str()?.to_string();
+      let reason = val.get("reason").and_then(|v| v.as_str()).unwrap_or("").to_string();
+      let checked_at = val.get("checkedAt").and_then(|v| v.as_u64()).unwrap_or(0);
+      let quota_recent = val.get("quotaRecent").and_then(|v| v.as_bool()).unwrap_or(false);
+      if status != "checking" || std::time::Instant::now() >= deadline {
+        return Some((status, reason, checked_at, quota_recent));
+      }
+      tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+  }
+
+  #[cfg(desktop)]
   async fn eval_identity_probe(webview: &tauri::Webview) -> Option<DesktopProbeResult> {
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     let tx_cell = Arc::new(std::sync::Mutex::new(Some(tx)));
@@ -10584,6 +10805,164 @@ impl SessionManager {
       Self::set_group_window_title(app, next_title.as_deref());
     }
     Ok(snap)
+  }
+
+  pub async fn test_external_agent_connection(
+    &self,
+    agent_id: &str,
+  ) -> Result<AgentConnectionTestResult, String> {
+    let agent = {
+      let locked = self.inner.lock().await;
+      locked
+        .store
+        .external_agents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .cloned()
+        .ok_or_else(|| "Agent tidak ditemukan di registry".to_string())?
+    };
+
+    #[cfg(desktop)]
+    {
+      use std::process::{Command, Stdio};
+      use std::time::{Duration, Instant};
+
+      let started = Instant::now();
+      let checked_at_ms = now_ms();
+      let mut status = "error".to_string();
+      let mut status_code = None;
+      let message: String;
+
+      match agent.kind {
+        ExternalAgentKind::OpenaiApi => {
+          let base = agent.base_url.trim().trim_end_matches('/');
+          if base.is_empty() {
+            status = "configuration_error".to_string();
+            message = "Base URL belum diisi".to_string();
+          } else {
+            let endpoint = format!("{base}/models");
+            let valid_url = Url::parse(&endpoint)
+              .ok()
+              .filter(|url| (url.scheme() == "https" || url.scheme() == "http") && url.host_str().is_some());
+            if valid_url.is_none() {
+              status = "configuration_error".to_string();
+              message = "Base URL harus berupa alamat HTTP atau HTTPS yang valid".to_string();
+            } else {
+              let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(8))
+                .redirect(reqwest::redirect::Policy::limited(2))
+                .build()
+                .map_err(|e| format!("Gagal menyiapkan HTTP client: {e}"))?;
+              let request = client
+                .get(endpoint)
+                .header(reqwest::header::ACCEPT, "application/json");
+              let request = if agent.api_key.trim().is_empty() {
+                request
+              } else {
+                request.bearer_auth(agent.api_key.trim())
+              };
+              match request.send().await {
+                Ok(response) => {
+                  let code = response.status().as_u16();
+                  status_code = Some(code);
+                  if response.status().is_success() {
+                    status = "healthy".to_string();
+                    message = "Endpoint /models merespons sukses; inferensi model belum dijalankan".to_string();
+                  } else if code == 401 || code == 403 {
+                    status = "auth_error".to_string();
+                    message = "Endpoint terjangkau, tetapi API key atau izin ditolak".to_string();
+                  } else if code == 429 {
+                    status = "rate_limited".to_string();
+                    message = "Endpoint terjangkau, tetapi sedang membatasi request (HTTP 429)".to_string();
+                  } else if code >= 500 {
+                    status = "server_error".to_string();
+                    message = format!("Server agent mengembalikan HTTP {code}");
+                  } else {
+                    status = "http_error".to_string();
+                    message = format!("Endpoint mengembalikan HTTP {code}");
+                  }
+                }
+                Err(error) => {
+                  status = if error.is_timeout() { "timeout" } else { "unreachable" }.to_string();
+                  message = if error.is_timeout() {
+                    "Request ke endpoint /models melewati batas waktu 8 detik".to_string()
+                  } else {
+                    format!("Tidak dapat menjangkau endpoint /models: {error}")
+                  };
+                }
+              }
+            }
+          }
+        }
+        ExternalAgentKind::LocalCli => {
+          let command = agent.command.trim();
+          if command.is_empty() {
+            status = "configuration_error".to_string();
+            message = "Command CLI belum diisi".to_string();
+          } else {
+            match Command::new(command)
+              .arg("--version")
+              .stdin(Stdio::null())
+              .stdout(Stdio::null())
+              .stderr(Stdio::null())
+              .spawn()
+            {
+              Ok(mut child) => {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                  match child.try_wait() {
+                    Ok(Some(exit)) => {
+                      if exit.success() {
+                        status = "healthy".to_string();
+                        message = "Executable CLI berhasil menjalankan --version; autentikasi provider belum diuji".to_string();
+                      } else {
+                        status = "command_error".to_string();
+                        message = format!("CLI berjalan tetapi keluar dengan kode {:?}", exit.code());
+                      }
+                      break;
+                    }
+                    Ok(None) if Instant::now() < deadline => {
+                      tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Ok(None) => {
+                      let _ = child.kill();
+                      let _ = child.wait();
+                      status = "timeout".to_string();
+                      message = "CLI tidak selesai menjalankan --version dalam 5 detik".to_string();
+                      break;
+                    }
+                    Err(error) => {
+                      let _ = child.kill();
+                      status = "command_error".to_string();
+                      message = format!("Gagal memeriksa proses CLI: {error}");
+                      break;
+                    }
+                  }
+                }
+              }
+              Err(error) => {
+                status = "not_found".to_string();
+                message = format!("Executable CLI tidak dapat dijalankan: {error}");
+              }
+            }
+          }
+        }
+      }
+
+      Ok(AgentConnectionTestResult {
+        id: agent.id,
+        status,
+        checked_at_ms,
+        latency_ms: started.elapsed().as_millis() as u64,
+        status_code,
+        message,
+      })
+    }
+    #[cfg(not(desktop))]
+    {
+      let _ = agent;
+      Err("Tes konektivitas API / CLI hanya tersedia pada build desktop".to_string())
+    }
   }
 
   #[allow(clippy::too_many_arguments)]
