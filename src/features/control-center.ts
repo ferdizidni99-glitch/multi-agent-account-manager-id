@@ -1,4 +1,4 @@
-import type { AccountHealthResult, AccountRecord, AgentConnectionTestResult, ExternalAgentRecord, GroupChatMessage, GroupChatRecord, ManagerSnapshot } from "../types";
+import type { AccountHealthResult, AccountRecord, AgentConnectionTestResult, ExternalAgentRecord, GroupChatMessage, GroupChatRecord, ManagerSnapshot, MuseAgentTelemetry, MuseTelemetryRun, MuseTelemetrySchedule } from "../types";
 import { assessAccount, summarizeRouter } from "./control-center-core.mjs";
 
 function escapeHtml(value: unknown): string {
@@ -232,7 +232,27 @@ export interface AgentOfficeInput {
   detail: string;
 }
 
-export function buildAgentOfficeRoster(state: ManagerSnapshot): AgentOfficeInput[] {
+function museTaskStatus(run: MuseTelemetryRun | undefined): "running" | "attention" | "idle" {
+  const status = (run?.status || "").toLowerCase().replace(/[^a-z_]/g, "");
+  if (["running", "in_progress", "inprogress", "queued", "pending", "started", "working", "processing"].includes(status)) return "running";
+  if (["failed", "error", "cancelled", "canceled", "timed_out", "timeout"].includes(status)) return "attention";
+  return "idle";
+}
+
+function telemetryRunForSchedule(telemetry: MuseAgentTelemetry | undefined, scheduleId: string): MuseTelemetryRun | undefined {
+  return telemetry?.runs?.find((run) => run.jobId === scheduleId);
+}
+
+function formatMuseTime(seconds: number | null | undefined): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return "Belum dijadwalkan";
+  const millis = seconds > 100_000_000_000 ? seconds : seconds * 1000;
+  return new Date(millis).toLocaleString();
+}
+
+export function buildAgentOfficeRoster(
+  state: ManagerSnapshot,
+  museTelemetry: Record<string, MuseAgentTelemetry> = {}
+): AgentOfficeInput[] {
   const activity = new Map<string, { state: AgentOfficeInput["state"]; detail: string; at: number }>();
   for (const group of state.groupChats) {
     for (const message of group.messages) {
@@ -250,19 +270,52 @@ export function buildAgentOfficeRoster(state: ManagerSnapshot): AgentOfficeInput
       });
     }
   }
+
   const accounts = state.accounts.map((account): AgentOfficeInput => {
     const key = account.providerId + ":" + account.uuid;
     const latest = activity.get(key);
     const provider = state.providers.find((item) => item.id === account.providerId);
     const loggedOut = account.authState === "logged_out";
     const authUnknown = account.authState === "unknown";
+    const telemetry = account.providerId === "muse" ? museTelemetry[key] : undefined;
+    const activeRun = telemetry?.runs?.find((run) => museTaskStatus(run) === "running");
+    const activeSchedule = activeRun?.jobId
+      ? telemetry?.schedules?.find((schedule) => schedule.id === activeRun.jobId)
+      : undefined;
+    const failedRun = !activeRun
+      ? telemetry?.runs?.find((run) => museTaskStatus(run) === "attention")
+      : undefined;
+    const telemetryAttention = telemetry?.status === "needs_auth" || telemetry?.status === "attention";
+    const telemetryUnavailable = telemetry?.status === "unavailable";
+    const activeDetail = activeRun
+      ? "VM · " + (activeSchedule?.title || "Tugas terjadwal")
+      : null;
+    const telemetryDetail = activeDetail
+      || (failedRun ? "VM · Eksekusi terakhir gagal" : null)
+      || (telemetry?.status === "needs_auth" ? "VM membutuhkan login ulang" : null)
+      || (telemetryUnavailable ? "VM tidak tersedia · mencoba kembali" : null)
+      || (telemetry?.status === "connected"
+        ? "VM terhubung · " + String(telemetry.schedules?.length || 0) + " jadwal"
+        : telemetry?.message || null);
+    const status = activeRun || latest?.state === "running"
+      ? "running"
+      : loggedOut || latest?.state === "attention" || telemetryAttention || telemetryUnavailable || Boolean(failedRun)
+        ? "attention"
+        : "idle";
     return {
       id: "account:" + key,
       name: account.alias || provider?.shortName || account.providerId,
-      state: latest?.state === "running" ? "running" : loggedOut || latest?.state === "attention" ? "attention" : "idle",
-      detail: latest?.detail || (loggedOut ? "Perlu login ulang" : authUnknown ? "Status login belum diverifikasi" : "Aktivitas di luar MAAM belum tersedia")
+      state: status,
+      detail: telemetryDetail || latest?.detail || (
+        loggedOut
+          ? "Perlu login ulang"
+          : account.providerId === "muse"
+            ? authUnknown ? "Status login belum diverifikasi · VM belum diperiksa" : "Menunggu koneksi VM Muse"
+            : authUnknown ? "Status login belum diverifikasi" : "Aktivitas di luar MAAM belum tersedia"
+      )
     };
   });
+
   const external = (state.externalAgents || []).map((agent): AgentOfficeInput => {
     const providerId = agent.kind === "openai_api" ? "api" : "cli";
     const key = providerId + ":" + agent.id;
@@ -277,11 +330,54 @@ export function buildAgentOfficeRoster(state: ManagerSnapshot): AgentOfficeInput
   return [...accounts, ...external];
 }
 
+function renderMuseSchedules(state: ManagerSnapshot, telemetryByAccount: Record<string, MuseAgentTelemetry>): string {
+  const rows: string[] = [];
+  let connectedCount = 0;
+  for (const account of state.accounts.filter((item) => item.providerId === "muse")) {
+    const key = account.providerId + ":" + account.uuid;
+    const telemetry = telemetryByAccount[key];
+    if (telemetry?.status === "connected") connectedCount += 1;
+    for (const schedule of telemetry?.schedules || []) {
+      const latestRun = telemetryRunForSchedule(telemetry, schedule.id);
+      const runState = museTaskStatus(latestRun);
+      const stateLabel = !schedule.enabled
+        ? "Nonaktif"
+        : runState === "running"
+          ? "Sedang berjalan"
+          : runState === "attention"
+            ? "Eksekusi gagal"
+            : "Terjadwal";
+      const stateClass = !schedule.enabled ? "idle" : runState;
+      rows.push([
+        '<div class="agent-office-schedule-row">',
+        '<div class="agent-office-schedule-main"><strong>', escapeHtml(schedule.title), '</strong>',
+        '<span>', escapeHtml(account.alias || "Muse"), ' · ', escapeHtml(schedule.scheduleKey || schedule.cadence || "Jadwal"), '</span></div>',
+        '<div class="agent-office-schedule-next"><span>', escapeHtml(formatMuseTime(schedule.nextRunAtUtc)), '</span>',
+        '<small class="agent-office-roster-state ', stateClass, '">', stateLabel, '</small></div>',
+        '</div>'
+      ].join(""));
+    }
+  }
+
+  const emptyText = state.accounts.some((item) => item.providerId === "muse")
+    ? "Belum ada data jadwal VM Muse. Konektor akan menyinkronkan daftar jadwal saat sesi tersedia."
+    : "Tambahkan akun Muse untuk menampilkan jadwal VM.";
+  return [
+    '<section class="agent-office-bottom-panel agent-office-schedules-panel">',
+    '<div class="agent-office-bottom-heading"><div><span class="cc-eyebrow">MUSE VM / SCHEDULER</span><h2>Jadwal dan eksekusi</h2></div>',
+    '<span class="cc-count">', String(rows.length), ' jadwal · ', String(connectedCount), ' VM terhubung</span></div>',
+    rows.length ? '<div class="agent-office-schedule-list">' + rows.join("") + '</div>' : '<div class="cc-empty">', emptyText, '</div>',
+    '<p class="cc-note">Data dibaca langsung dari layanan jadwal Muse. MAAM hanya memantau; menjalankan, mengubah, atau menghapus jadwal tetap dilakukan di Muse.</p>',
+    '</section>'
+  ].join("");
+}
+
 export function renderAgentCenter(
   state: ManagerSnapshot,
-  connectionResults: Record<string, AgentConnectionTestResult> = {}
+  connectionResults: Record<string, AgentConnectionTestResult> = {},
+  museTelemetry: Record<string, MuseAgentTelemetry> = {}
 ): string {
-  const agents = buildAgentOfficeRoster(state);
+  const agents = buildAgentOfficeRoster(state, museTelemetry);
   const running = agents.filter((agent) => agent.state === "running").length;
   const attention = agents.filter((agent) => agent.state === "attention").length;
   const externalAgents = state.externalAgents || [];
@@ -304,12 +400,12 @@ export function renderAgentCenter(
 
   return [
     '<div class="agent-office-page">',
-    '<header class="agent-office-header"><div><div class="cc-eyebrow">叠号 / MULTI-AGENT WORKSPACE</div><h1>Agent Office</h1><p>Pantau agent dari akun yang tersimpan dan aktivitas kerja di workspace MAAM.</p></div>',
+    '<header class="agent-office-header"><div><div class="cc-eyebrow">叠号 / MULTI-AGENT WORKSPACE</div><h1>Agent Office</h1><p>Pantau agent MAAM dan pekerjaan yang dijalankan langsung oleh VM Muse.</p></div>',
     '<div class="cc-header-actions"><button id="agent-manage-btn" class="btn" type="button">Kelola koneksi</button><button id="agent-create-workspace-btn" class="btn primary" type="button">+ Workspace</button></div></header>',
     '<section class="agent-office-stats">',
     '<article><span>Total agent</span><strong>', String(agents.length), '</strong><small>Akun web + koneksi eksternal</small></article>',
-    '<article><span>Sedang bekerja</span><strong class="is-running">', String(running), '</strong><small>Aktivitas aktif di Group Chat</small></article>',
-    '<article><span>Perlu perhatian</span><strong class="is-attention">', String(attention), '</strong><small>Login atau pesan bermasalah</small></article>',
+    '<article><span>Sedang bekerja</span><strong class="is-running">', String(running), '</strong><small>Group Chat MAAM + run VM Muse</small></article>',
+    '<article><span>Perlu perhatian</span><strong class="is-attention">', String(attention), '</strong><small>Login atau eksekusi bermasalah</small></article>',
     '<article><span>Workspace</span><strong>', String(state.groupChats.length), '</strong><small>Ruang kolaborasi tersimpan</small></article>',
     '</section>',
     '<div class="agent-office-layout">',
@@ -325,11 +421,12 @@ export function renderAgentCenter(
     '<div class="agent-office-activity">', renderActivity(state), '</div>',
     '</aside>',
     '</div>',
+    renderMuseSchedules(state, museTelemetry),
     '<section class="agent-office-bottom-panel"><div class="agent-office-bottom-heading"><div><span class="cc-eyebrow">TEAM SPACES</span><h2>Workspace</h2></div><span class="cc-count">', String(state.groupChats.length), ' ruang</span></div>',
     '<div class="cc-workspace-grid">', workspaces, '</div></section>',
     '<section class="agent-office-bottom-panel"><div class="agent-office-bottom-heading"><div><span class="cc-eyebrow">CONNECTED RUNTIMES</span><h2>Koneksi API / CLI</h2></div><button id="agent-manage-inline-btn" class="cc-text-action" type="button">Kelola →</button></div>',
     '<div class="cc-agent-grid">', agentCards, '</div>',
-    '<p class="cc-note">Status sprite mengikuti aktivitas Group Chat yang tercatat di MAAM. Simulasi kantor hanya memvisualisasikan event yang dikirim aplikasi; tidak mengubah sesi, cookie, atau keputusan routing akun.</p>',
+    '<p class="cc-note">Status VM Muse menggunakan run dan jadwal yang diterima langsung dari layanan Muse. Status Group Chat dan koneksi API / CLI tetap berasal dari MAAM. Konektor ini hanya membaca telemetry.</p>',
     '</section>',
     '</div>'
   ].join("");
