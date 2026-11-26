@@ -301,9 +301,9 @@ export function buildAgentOfficeRoster(
             ? recentEvent.taskId
             : "";
     const recentEventRunning = ["running", "in_progress", "inprogress", "queued", "pending", "started", "starting", "working", "processing", "executing", "active"].includes(recentEventStatus)
-      || /task\\.(started|running|queued|progress)|task_(started|running|queued|progress)/.test(recentEventName);
+      || /task\.(started|running|queued|progress)|task_(started|running|queued|progress)/.test(recentEventName);
     const recentEventAttention = ["failed", "error", "cancelled", "canceled", "timed_out", "timeout"].includes(recentEventStatus)
-      || /task\\.(failed|error|cancelled)|task_(failed|error|cancelled)/.test(recentEventName);
+      || /task\.(failed|error|cancelled)|task_(failed|error|cancelled)/.test(recentEventName);
     const activeRun = telemetry?.runs?.find((run) => museTaskStatus(run) === "running");
     const eventSchedule = recentEventJobId
       ? telemetry?.schedules?.find((schedule) => schedule.id === recentEventJobId)
