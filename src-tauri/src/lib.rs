@@ -550,6 +550,18 @@ async fn delete_external_agent(
 }
 
 #[tauri::command]
+async fn test_external_agent_connection(
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  agent_id: String,
+) -> Result<session_manager::AgentConnectionTestResult, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以测试 API / CLI agent".to_string());
+  }
+  mgr.test_external_agent_connection(&agent_id).await
+}
+
+#[tauri::command]
 async fn update_group_workflow(
   mgr: State<'_, Arc<SessionManager>>,
   webview: tauri::Webview,
@@ -790,6 +802,7 @@ pub fn run() {
       append_group_shared_context,
       upsert_external_agent,
       delete_external_agent,
+      test_external_agent_connection,
       update_group_workflow,
       reset_group_thread_binding,
       get_site_adapters,
