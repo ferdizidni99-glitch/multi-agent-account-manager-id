@@ -67,17 +67,20 @@ pub async fn start_muse_agent_telemetry(
         }
     }
 
-    // Read cookies from the account's existing MAAM WebView profile. They are
-    // passed to the bridge through stdin only; they are not saved to disk or
-    // included in process arguments, logs, or frontend events.
-    let cookies = manager.muse_telemetry_cookie_header(&app, &uuid).await?;
+    if !cfg!(windows) {
+        return Err("Muse VM telemetry bridge saat ini hanya dibundel pada installer Windows".to_string());
+    }
     let resource_dir = app.path().resource_dir()
         .map_err(|_| "Direktori resource MAAM tidak tersedia".to_string())?;
-    let bridge_name = if cfg!(windows) { "muse-agent-bridge.exe" } else { "muse-agent-bridge" };
-    let bridge_path = resource_dir.join("sidecars").join(bridge_name);
+    let bridge_path = resource_dir.join("sidecars").join("muse-agent-bridge.exe");
     if !bridge_path.is_file() {
         return Err("Muse telemetry bridge belum tersedia pada build ini".to_string());
     }
+
+    // Read cookies from the account's existing MAAM WebView profile. They are
+    // passed to the bridge process through its private stdin pipe only; they
+    // are not saved to disk or included in process arguments, logs, or events.
+    let cookies = manager.muse_telemetry_cookie_header(&app, &uuid).await?;
 
     let mut bridge_command = Command::new(&bridge_path);
     #[cfg(windows)]
