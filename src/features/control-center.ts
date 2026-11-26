@@ -291,6 +291,7 @@ export function buildAgentOfficeRoster(
       ? "VM · " + (activeSchedule?.title || "Tugas terjadwal")
       : null;
     const telemetryDetail = activeDetail
+      || (latest?.state === "running" ? latest.detail : null)
       || (failedRun ? "VM · Eksekusi terakhir gagal" : null)
       || (telemetry?.status === "needs_auth" ? "VM membutuhkan login ulang" : null)
       || (telemetryUnavailable ? "VM tidak tersedia · mencoba kembali" : null)
@@ -359,9 +360,12 @@ function renderMuseSchedules(state: ManagerSnapshot, telemetryByAccount: Record<
     }
   }
 
-  const emptyText = state.accounts.some((item) => item.providerId === "muse")
-    ? "Belum ada data jadwal VM Muse. Konektor akan menyinkronkan daftar jadwal saat sesi tersedia."
-    : "Tambahkan akun Muse untuk menampilkan jadwal VM.";
+  const hasMuseAccount = state.accounts.some((item) => item.providerId === "muse");
+  const emptyText = !hasMuseAccount
+    ? "Tambahkan akun Muse untuk menampilkan jadwal VM."
+    : connectedCount > 0
+      ? "VM Muse terhubung, tetapi belum ada jadwal yang tersimpan."
+      : "Belum ada data jadwal VM Muse. Konektor akan menyinkronkan daftar jadwal saat sesi tersedia.";
   return [
     '<section class="agent-office-bottom-panel agent-office-schedules-panel">',
     '<div class="agent-office-bottom-heading"><div><span class="cc-eyebrow">MUSE VM / SCHEDULER</span><h2>Jadwal dan eksekusi</h2></div>',
