@@ -3,6 +3,7 @@ name: Upgrade Checks
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened]
   push:
     branches: [feature/smart-router-agent-center]
 
@@ -10,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: upgrade-checks-${{ github.event.pull_request.number || github.ref_name }}
+  group: upgrade-checks-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
