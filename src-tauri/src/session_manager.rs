@@ -3831,6 +3831,100 @@ pub struct AgentConnectionTestResult {
   pub message: String,
 }
 
+fn classify_live_account_health(
+  live_health: Option<(String, String, u64, bool)>,
+  started_at_ms: u64,
+  dom_logged_out: bool,
+  dom_page_error: bool,
+  completed_at_ms: u64,
+) -> (String, bool, bool, String, Option<u64>) {
+  match live_health {
+    Some((auth_status, _auth_reason, auth_checked_at, quota_recent))
+      if auth_status == "ok" && auth_checked_at >= started_at_ms =>
+    {
+      (
+        "healthy".to_string(),
+        true,
+        quota_recent,
+        if quota_recent {
+          "Endpoint autentikasi berhasil diverifikasi; kuota juga berhasil diperbarui".to_string()
+        } else {
+          "Token berhasil diverifikasi, tetapi refresh kuota belum terkonfirmasi".to_string()
+        },
+        Some(auth_checked_at),
+      )
+    }
+    Some((auth_status, auth_reason, auth_checked_at, _quota_recent))
+      if auth_status == "invalid" && auth_checked_at >= started_at_ms =>
+    {
+      (
+        "needs_auth".to_string(),
+        false,
+        false,
+        format!("Endpoint autentikasi menolak sesi ({auth_reason}); login ulang diperlukan"),
+        Some(auth_checked_at),
+      )
+    }
+    Some((auth_status, auth_reason, auth_checked_at, _))
+      if auth_status == "error" && auth_checked_at >= started_at_ms =>
+    {
+      (
+        "attention".to_string(),
+        false,
+        false,
+        format!("Pemeriksaan autentikasi gagal ({auth_reason}); token belum dapat dipastikan"),
+        Some(auth_checked_at),
+      )
+    }
+    _ if dom_logged_out => (
+      "needs_auth".to_string(),
+      false,
+      false,
+      "Halaman akun mendeteksi sesi sudah keluar; login ulang diperlukan".to_string(),
+      Some(completed_at_ms),
+    ),
+    _ if dom_page_error => (
+      "attention".to_string(),
+      false,
+      false,
+      "Halaman akun bermasalah; endpoint autentikasi belum dapat diverifikasi".to_string(),
+      Some(completed_at_ms),
+    ),
+    _ => (
+      "unverified".to_string(),
+      false,
+      false,
+      "WebView merespons, tetapi belum ada hasil autentikasi live yang dapat dipastikan".to_string(),
+      Some(completed_at_ms),
+    ),
+  }
+}
+
+fn classify_agent_http_status(status_code: u16) -> (&'static str, String) {
+  match status_code {
+    200..=299 => (
+      "healthy",
+      "Endpoint /models merespons sukses; inferensi model belum dijalankan".to_string(),
+    ),
+    401 | 403 => (
+      "auth_error",
+      "Endpoint terjangkau, tetapi API key atau izin ditolak".to_string(),
+    ),
+    429 => (
+      "rate_limited",
+      "Endpoint terjangkau, tetapi sedang membatasi request (HTTP 429)".to_string(),
+    ),
+    500..=599 => (
+      "server_error",
+      format!("Server agent mengembalikan HTTP {status_code}"),
+    ),
+    _ => (
+      "http_error",
+      format!("Endpoint mengembalikan HTTP {status_code}"),
+    ),
+  }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagerSnapshot {
@@ -7054,66 +7148,13 @@ impl SessionManager {
             }
 
             let (status, auth_verified, quota_verified, message, checked_at_ms) =
-              match live_health {
-                Some((auth_status, auth_reason, auth_checked_at, quota_recent))
-                  if auth_status == "ok" && auth_checked_at >= started_at_ms =>
-                {
-                  (
-                    "healthy".to_string(),
-                    true,
-                    quota_recent,
-                    if quota_recent {
-                      "Endpoint autentikasi berhasil diverifikasi; kuota juga berhasil diperbarui".to_string()
-                    } else {
-                      "Token berhasil diverifikasi, tetapi refresh kuota belum terkonfirmasi".to_string()
-                    },
-                    Some(auth_checked_at),
-                  )
-                }
-                Some((auth_status, auth_reason, auth_checked_at, _quota_recent))
-                  if auth_status == "invalid" && auth_checked_at >= started_at_ms =>
-                {
-                  (
-                    "needs_auth".to_string(),
-                    false,
-                    false,
-                    format!("Endpoint autentikasi menolak sesi ({auth_reason}); login ulang diperlukan"),
-                    Some(auth_checked_at),
-                  )
-                }
-                Some((auth_status, auth_reason, auth_checked_at, _))
-                  if auth_status == "error" && auth_checked_at >= started_at_ms =>
-                {
-                  (
-                    "attention".to_string(),
-                    false,
-                    false,
-                    format!("Pemeriksaan autentikasi gagal ({auth_reason}); token belum dapat dipastikan"),
-                    Some(auth_checked_at),
-                  )
-                }
-                _ if dom_logged_out => (
-                  "needs_auth".to_string(),
-                  false,
-                  false,
-                  "Halaman akun mendeteksi sesi sudah keluar; login ulang diperlukan".to_string(),
-                  Some(now_ms()),
-                ),
-                _ if dom_page_error => (
-                  "attention".to_string(),
-                  false,
-                  false,
-                  "Halaman akun bermasalah; endpoint autentikasi belum dapat diverifikasi".to_string(),
-                  Some(now_ms()),
-                ),
-                _ => (
-                  "unverified".to_string(),
-                  false,
-                  false,
-                  "WebView merespons, tetapi belum ada hasil autentikasi live yang dapat dipastikan".to_string(),
-                  Some(now_ms()),
-                ),
-              };
+              classify_live_account_health(
+                live_health,
+                started_at_ms,
+                dom_logged_out,
+                dom_page_error,
+                now_ms(),
+              );
 
             let health_snap = {
               let mut locked = mgr.inner.lock().await;
@@ -7136,6 +7177,17 @@ impl SessionManager {
               mgr.emit_snapshot(&app_handle, &snap);
             }
           });
+        } else {
+          let snap = {
+            let mut locked = self.inner.lock().await;
+            if let Some(result) = locked.account_health.get_mut(&key) {
+              result.status = "unverified".to_string();
+              result.checked_at_ms = Some(now_ms());
+              result.message = "WebView tidak tersedia saat pemeriksaan dimulai; token belum diverifikasi".to_string();
+            }
+            Self::snapshot_from_locked(&locked)
+          };
+          self.emit_snapshot(app, &snap);
         }
       }
 
@@ -10865,22 +10917,9 @@ impl SessionManager {
                 Ok(response) => {
                   let code = response.status().as_u16();
                   status_code = Some(code);
-                  if response.status().is_success() {
-                    status = "healthy".to_string();
-                    message = "Endpoint /models merespons sukses; inferensi model belum dijalankan".to_string();
-                  } else if code == 401 || code == 403 {
-                    status = "auth_error".to_string();
-                    message = "Endpoint terjangkau, tetapi API key atau izin ditolak".to_string();
-                  } else if code == 429 {
-                    status = "rate_limited".to_string();
-                    message = "Endpoint terjangkau, tetapi sedang membatasi request (HTTP 429)".to_string();
-                  } else if code >= 500 {
-                    status = "server_error".to_string();
-                    message = format!("Server agent mengembalikan HTTP {code}");
-                  } else {
-                    status = "http_error".to_string();
-                    message = format!("Endpoint mengembalikan HTTP {code}");
-                  }
+                  let (classified_status, classified_message) = classify_agent_http_status(code);
+                  status = classified_status.to_string();
+                  message = classified_message;
                 }
                 Err(error) => {
                   status = if error.is_timeout() { "timeout" } else { "unreachable" }.to_string();
@@ -15392,5 +15431,100 @@ mod tests {
 
     drop(locked);
     let _ = std::fs::remove_dir_all(&temp_dir);
+  }
+}
+
+
+#[cfg(test)]
+mod account_health_diagnostics_tests {
+  use super::*;
+
+  #[test]
+  fn live_auth_success_and_quota_success_are_reported_separately() {
+    let result = classify_live_account_health(
+      Some(("ok".to_string(), String::new(), 200, true)),
+      100,
+      false,
+      false,
+      300,
+    );
+    assert_eq!(result.0, "healthy");
+    assert!(result.1);
+    assert!(result.2);
+    assert_eq!(result.4, Some(200));
+  }
+
+  #[test]
+  fn live_auth_success_does_not_claim_quota_success_without_fresh_data() {
+    let result = classify_live_account_health(
+      Some(("ok".to_string(), String::new(), 200, false)),
+      100,
+      false,
+      false,
+      300,
+    );
+    assert_eq!(result.0, "healthy");
+    assert!(result.1);
+    assert!(!result.2);
+  }
+
+  #[test]
+  fn stale_auth_result_is_not_accepted_as_a_new_live_check() {
+    let result = classify_live_account_health(
+      Some(("ok".to_string(), String::new(), 90, true)),
+      100,
+      false,
+      false,
+      300,
+    );
+    assert_eq!(result.0, "unverified");
+    assert!(!result.1);
+    assert!(!result.2);
+  }
+
+  #[test]
+  fn rejected_auth_is_classified_as_needs_auth() {
+    let result = classify_live_account_health(
+      Some(("invalid".to_string(), "http_401".to_string(), 200, false)),
+      100,
+      false,
+      false,
+      300,
+    );
+    assert_eq!(result.0, "needs_auth");
+    assert!(result.3.contains("http_401"));
+  }
+
+  #[test]
+  fn probe_failure_is_not_misreported_as_an_invalid_token() {
+    let result = classify_live_account_health(
+      Some(("error".to_string(), "network_error".to_string(), 200, false)),
+      100,
+      false,
+      false,
+      300,
+    );
+    assert_eq!(result.0, "attention");
+    assert!(!result.1);
+  }
+
+  #[test]
+  fn dom_logout_and_page_error_are_safe_fallbacks() {
+    assert_eq!(
+      classify_live_account_health(None, 100, true, false, 300).0,
+      "needs_auth"
+    );
+    assert_eq!(
+      classify_live_account_health(None, 100, false, true, 300).0,
+      "attention"
+    );
+  }
+
+  #[test]
+  fn api_status_mapping_distinguishes_auth_rate_limit_and_server_errors() {
+    assert_eq!(classify_agent_http_status(200).0, "healthy");
+    assert_eq!(classify_agent_http_status(401).0, "auth_error");
+    assert_eq!(classify_agent_http_status(429).0, "rate_limited");
+    assert_eq!(classify_agent_http_status(503).0, "server_error");
   }
 }
