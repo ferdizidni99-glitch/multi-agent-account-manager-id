@@ -260,7 +260,7 @@ export function buildAgentOfficeRoster(state: ManagerSnapshot): AgentOfficeInput
       id: "account:" + key,
       name: account.alias || provider?.shortName || account.providerId,
       state: latest?.state === "running" ? "running" : loggedOut || latest?.state === "attention" ? "attention" : "idle",
-      detail: latest?.detail || (loggedOut ? "Perlu login ulang" : authUnknown ? "Status login belum diverifikasi" : provider?.shortName || "Akun siap digunakan")
+      detail: latest?.detail || (loggedOut ? "Perlu login ulang" : authUnknown ? "Status login belum diverifikasi" : "Aktivitas di luar MAAM belum tersedia")
     };
   });
   const external = (state.externalAgents || []).map((agent): AgentOfficeInput => {
@@ -297,7 +297,7 @@ export function renderAgentCenter(
         '<span class="agent-office-presence ', agent.state, '"></span>',
         '<div class="agent-office-roster-meta"><strong>', escapeHtml(agent.name), '</strong>',
         '<span>', escapeHtml(agent.detail), '</span></div>',
-        '<span class="agent-office-roster-state ', agent.state, '">', agent.state === "running" ? "Bekerja" : agent.state === "attention" ? "Perhatian" : "Siaga", '</span>',
+        '<span class="agent-office-roster-state ', agent.state, '">', agent.state === "running" ? "Bekerja" : agent.state === "attention" ? "Perhatian" : "Terhubung", '</span>',
         '</div>'
       ].join("")).join("")
     : '<div class="cc-empty">Tambahkan akun provider untuk mengisi kantor agent.</div>';
