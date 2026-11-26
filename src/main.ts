@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
+import { renderAgentCenter, renderSmartRouter } from "./features/control-center";
 import type {
   AccountKey,
   AccountRecord,
@@ -296,7 +297,7 @@ let snapshot: ManagerSnapshot | null = null;
 let modal: ModalMode = { kind: "none" };
 let optimisticSwitching: AccountKey | null = null;
 let busy = false;
-let viewMode: "provider" | "groups" = "provider";
+let viewMode: "provider" | "groups" | "router" | "agents" = "provider";
 let lastGroupListScroll = 0;
 let shouldAnimateModal = false;
 let modalOverlayScrollTop = 0;
@@ -376,6 +377,9 @@ function syncViewModeFromSnapshot(state: ManagerSnapshot | null): void {
   if (!state) return;
   if (isMobilePlatform(state.platform)) {
     viewMode = "provider";
+    return;
+  }
+  if (viewMode === "router" || viewMode === "agents") {
     return;
   }
   if (state.activeGroupId) {
@@ -4254,6 +4258,7 @@ function render(): void {
   
   const isMobile = isMobilePlatform(snapshot.platform);
   const isGroupsView = !isMobile && viewMode === "groups";
+  const isControlView = !isMobile && (viewMode === "router" || viewMode === "agents");
   const anyGroupNeedsAuth = snapshot.groupChats.some(groupHasNeedsAuth);
 
   if (isMobile) {
@@ -4295,7 +4300,7 @@ function render(): void {
             ${snapshot.providers
               .map(
                 (p) => `
-                <button class="rail-btn ${!isGroupsView && p.id === provider.id ? "active" : ""} ${!p.enabled ? "disabled" : ""}" data-provider="${escapeHtml(p.id)}" title="${escapeHtml(p.name)}" type="button">
+                <button class="rail-btn ${viewMode === "provider" && p.id === provider.id ? "active" : ""} ${!p.enabled ? "disabled" : ""}" data-provider="${escapeHtml(p.id)}" title="${escapeHtml(p.name)}" type="button">
                   <div class="rail-logo-box">${renderProviderLogo(p, "rail-logo-img")}</div>
                   <span class="rail-label">${escapeHtml(p.shortName)}</span>
                   ${!p.enabled ? `<span class="rail-pending-tag">待接入</span>` : ""}
@@ -4303,6 +4308,17 @@ function render(): void {
               `
               )
               .join("")}
+          </div>
+          <div class="rail-control-tools">
+            <div class="rail-divider"></div>
+            <button id="smart-router-rail-btn" class="rail-btn ${viewMode === "router" ? "active" : ""}" title="Smart Router · kondisi dan kelayakan akun" type="button">
+              <div class="rail-logo-box rail-control-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M4 17h16M13 7l3-3m-3 3 3 3M9 17l-3-3m3 3-3 3"/></svg></div>
+              <span class="rail-label">Router</span>
+            </button>
+            <button id="agent-center-rail-btn" class="rail-btn ${viewMode === "agents" ? "active" : ""}" title="Agent Center · tim dan workspace" type="button">
+              <div class="rail-logo-box rail-control-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="7" width="14" height="13" rx="3"/><path d="M9 7V5a3 3 0 0 1 6 0v2M9 13h.01M15 13h.01M9 17h6"/></svg></div>
+              <span class="rail-label">Agents</span>
+            </button>
           </div>
           <div class="rail-footer">
           ${maamLanguageSelectorHtml()}
@@ -4346,10 +4362,13 @@ function render(): void {
             </button>
           </div>
         </aside>
-        <section class="middle-column">
-          ${isGroupsView ? renderGroupMiddleContent(snapshot, provider) : renderMiddleContent(snapshot, provider)}
-        </section>
-        ${isGroupsView ? renderGroupRightStage(snapshot) : renderRightStage(snapshot, provider)}
+        ${isControlView
+          ? `<main class="control-center-shell">${viewMode === "router" ? renderSmartRouter(snapshot) : renderAgentCenter(snapshot)}</main>`
+          : `<section class="middle-column">
+              ${isGroupsView ? renderGroupMiddleContent(snapshot, provider) : renderMiddleContent(snapshot, provider)}
+            </section>
+            ${isGroupsView ? renderGroupRightStage(snapshot) : renderRightStage(snapshot, provider)}`
+        }
       </div>
     `;
     applyMaamLocalization();
@@ -4382,6 +4401,19 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     await callCommand("select_group_chat", { groupId: targetId });
   });
 
+  const openControlView = async (target: "router" | "agents") => {
+    if (viewMode === target) return;
+    if (modal.kind !== "none") await setModal({ kind: "none" });
+    viewMode = target;
+    render();
+  };
+  document.querySelector("#smart-router-rail-btn")?.addEventListener("click", () => {
+    void openControlView("router");
+  });
+  document.querySelector("#agent-center-rail-btn")?.addEventListener("click", () => {
+    void openControlView("agents");
+  });
+
   document.querySelectorAll<HTMLElement>("[data-provider]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const nextId = btn.dataset.provider as ProviderId;
@@ -4409,6 +4441,28 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
   document
     .querySelector("#open-external-agents-from-group-btn")
     ?.addEventListener("click", handleOpenExternalAgents);
+
+  document.querySelector("#agent-manage-btn")?.addEventListener("click", handleOpenExternalAgents);
+  document.querySelector("#agent-manage-inline-btn")?.addEventListener("click", handleOpenExternalAgents);
+  document.querySelector("#agent-create-workspace-btn")?.addEventListener("click", async () => {
+    await openCreateGroupModal(state);
+  });
+  document.querySelector("#router-refresh-btn")?.addEventListener("click", async () => {
+    await callCommand("trigger_quota_sync", {});
+  });
+  document.querySelectorAll<HTMLElement>("[data-open-agent-workspace]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const groupId = button.dataset.openAgentWorkspace;
+      if (!groupId) return;
+      if (modal.kind !== "none") await setModal({ kind: "none" });
+      viewMode = "groups";
+      if (groupId === state.activeGroupId) {
+        render();
+        return;
+      }
+      await callCommand("select_group_chat", { groupId });
+    });
+  });
 
   document.querySelectorAll<HTMLElement>("[data-open-ext-agent-id]").forEach((btn) => {
     btn.addEventListener("click", async () => {
