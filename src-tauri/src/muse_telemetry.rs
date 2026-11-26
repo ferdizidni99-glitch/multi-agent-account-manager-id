@@ -152,6 +152,9 @@ pub async fn start_muse_agent_telemetry(
         let bridge_was_registered = if let Some(state) = app_for_reader.try_state::<MuseTelemetryState>() {
             if let Ok(mut workers) = state.workers.lock() {
                 if let Some(mut worker) = workers.remove(&core_account_id) {
+                    if matches!(worker.child.try_wait(), Ok(None) | Err(_)) {
+                        let _ = worker.child.kill();
+                    }
                     let _ = worker.child.wait();
                     true
                 } else {
