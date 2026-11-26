@@ -278,16 +278,44 @@ export function buildAgentOfficeRoster(
     const loggedOut = account.authState === "logged_out";
     const authUnknown = account.authState === "unknown";
     const telemetry = account.providerId === "muse" ? museTelemetry[key] : undefined;
+    const recentEvent = telemetry?.recentEvent;
+    const recentEventStatus = typeof recentEvent?.status === "string"
+      ? recentEvent.status.toLowerCase().replace(/[^a-z_]/g, "")
+      : "";
+    const recentEventName = typeof recentEvent?.event_name === "string"
+      ? recentEvent.event_name.toLowerCase()
+      : typeof recentEvent?.eventName === "string"
+        ? recentEvent.eventName.toLowerCase()
+        : "";
+    const recentEventJobId = typeof recentEvent?.job_id === "string"
+      ? recentEvent.job_id
+      : typeof recentEvent?.jobId === "string"
+        ? recentEvent.jobId
+        : typeof recentEvent?.task_id === "string"
+          ? recentEvent.task_id
+          : typeof recentEvent?.taskId === "string"
+            ? recentEvent.taskId
+            : "";
+    const recentEventRunning = ["running", "in_progress", "inprogress", "queued", "pending", "started", "starting", "working", "processing", "executing", "active"].includes(recentEventStatus)
+      || /task\\.(started|running|queued|progress)|task_(started|running|queued|progress)/.test(recentEventName);
+    const recentEventAttention = ["failed", "error", "cancelled", "canceled", "timed_out", "timeout"].includes(recentEventStatus)
+      || /task\\.(failed|error|cancelled)|task_(failed|error|cancelled)/.test(recentEventName);
     const activeRun = telemetry?.runs?.find((run) => museTaskStatus(run) === "running");
+    const eventSchedule = recentEventJobId
+      ? telemetry?.schedules?.find((schedule) => schedule.id === recentEventJobId)
+      : undefined;
     const activeSchedule = activeRun?.jobId
       ? telemetry?.schedules?.find((schedule) => schedule.id === activeRun.jobId)
-      : undefined;
-    const failedRun = !activeRun
+      : eventSchedule;
+    const eventRunIsRelevant = !recentEventJobId || Boolean(eventSchedule);
+    const taskEventRunning = !activeRun && recentEventRunning && eventRunIsRelevant;
+    const failedRun = !activeRun && !taskEventRunning
       ? telemetry?.runs?.find((run) => museTaskStatus(run) === "attention")
       : undefined;
+    const taskEventAttention = !activeRun && recentEventAttention && eventRunIsRelevant;
     const telemetryAttention = telemetry?.status === "needs_auth" || telemetry?.status === "attention";
     const telemetryUnavailable = telemetry?.status === "unavailable" || telemetry?.status === "bridge_stopped";
-    const activeDetail = activeRun
+    const activeDetail = activeRun || taskEventRunning
       ? "VM · " + (activeSchedule?.title || "Tugas terjadwal")
       : null;
     const telemetryDetail = activeDetail
@@ -298,9 +326,9 @@ export function buildAgentOfficeRoster(
       || (telemetry?.status === "connected"
         ? "VM terhubung · " + String(telemetry.schedules?.length || 0) + " jadwal"
         : telemetry?.message || null);
-    const status = activeRun || latest?.state === "running"
+    const status = activeRun || taskEventRunning || latest?.state === "running"
       ? "running"
-      : loggedOut || latest?.state === "attention" || telemetryAttention || telemetryUnavailable || Boolean(failedRun)
+      : loggedOut || latest?.state === "attention" || telemetryAttention || telemetryUnavailable || Boolean(failedRun) || taskEventAttention
         ? "attention"
         : "idle";
     return {
