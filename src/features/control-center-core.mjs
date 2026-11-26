@@ -67,6 +67,14 @@ export function assessAccount(snapshot, account, now = Date.now()) {
   if (hasDepletedQuota(account)) {
     reasons.push("Kuota terdeteksi habis");
   }
+  const hasQuotaSnapshot = Boolean(
+    account.quotaDetail ||
+    typeof account.quotaPercent === "number" ||
+    (typeof account.quotaText === "string" && account.quotaText.trim())
+  );
+  if (!hasQuotaSnapshot) {
+    reasons.push("Data kuota belum tersedia di snapshot; kuota belum terverifikasi");
+  }
   if (hasActiveTurn) {
     reasons.push("Sedang menjalankan giliran pada Group Chat");
   }
@@ -81,6 +89,8 @@ export function assessAccount(snapshot, account, now = Date.now()) {
     status = "attention";
   } else if (hasActiveTurn) {
     status = "busy";
+  } else if (!hasQuotaSnapshot) {
+    status = "attention";
   }
 
   return {
