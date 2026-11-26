@@ -1,4 +1,4 @@
-import type { AccountHealthResult, AccountRecord, AgentConnectionTestResult, ExternalAgentRecord, GroupChatMessage, GroupChatRecord, ManagerSnapshot, MuseAgentTelemetry, MuseTelemetryRun, MuseTelemetrySchedule } from "../types";
+import type { AccountHealthResult, AccountRecord, AgentConnectionTestResult, ExternalAgentRecord, GroupChatMessage, GroupChatRecord, ManagerSnapshot, MuseAgentTelemetry, MuseTelemetryRun } from "../types";
 import { assessAccount, summarizeRouter } from "./control-center-core.mjs";
 
 function escapeHtml(value: unknown): string {
