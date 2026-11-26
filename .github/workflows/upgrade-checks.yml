@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           choco install nsis --yes --no-progress
-          $nsisPath = Join-Path $env:ProgramFiles(x86) "NSIS"
+          $nsisPath = Join-Path "${env:ProgramFiles(x86)}" "NSIS"
           if (Test-Path $nsisPath) {
             Add-Content -Path $env:GITHUB_PATH -Value $nsisPath
           }
