@@ -107,6 +107,7 @@ class MuseAgentBridgeSanitizationTests(unittest.TestCase):
 
     def test_task_subscription_emits_allowlisted_live_event(self):
         events = []
+        methods = []
 
         class OneSubscriptionStop:
             def __init__(self):
@@ -124,7 +125,7 @@ class MuseAgentBridgeSanitizationTests(unittest.TestCase):
                 self.cookies = cookies
 
             def subscribe_raw(self, method, **kwargs):
-                self.assert_method = method
+                methods.append(method)
                 kwargs["on_record"](
                     b'{"event_name":"task.updated","payload":{"job_id":"job-1","status":"running","prompt":"private"}}'
                 )
@@ -136,6 +137,7 @@ class MuseAgentBridgeSanitizationTests(unittest.TestCase):
         with patch.object(bridge, "Gateway", FakeGateway), patch.object(bridge, "emit", events.append):
             bridge.subscribe_task_events("hatch_sess=test", OneSubscriptionStop())
 
+        self.assertEqual(methods, ["tasks.subscribe"])
         live = next(item for item in events if item["type"] == "task_event")
         self.assertEqual(live["status"], "connected")
         self.assertEqual(live["event"]["job_id"], "job-1")
