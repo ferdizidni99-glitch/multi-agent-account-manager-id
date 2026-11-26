@@ -1,4 +1,6 @@
 mod group_transport;
+mod agent_office;
+mod muse_telemetry;
 mod platform;
 mod providers;
 mod session_manager;
@@ -550,6 +552,18 @@ async fn delete_external_agent(
 }
 
 #[tauri::command]
+async fn test_external_agent_connection(
+  mgr: State<'_, Arc<SessionManager>>,
+  webview: tauri::Webview,
+  agent_id: String,
+) -> Result<session_manager::AgentConnectionTestResult, String> {
+  if webview.label() != "manager" {
+    return Err("仅账号管理页可以测试 API / CLI agent".to_string());
+  }
+  mgr.test_external_agent_connection(&agent_id).await
+}
+
+#[tauri::command]
 async fn update_group_workflow(
   mgr: State<'_, Arc<SessionManager>>,
   webview: tauri::Webview,
@@ -645,6 +659,8 @@ pub fn run() {
       let app_data_dir = app.path().app_data_dir()?;
       let session_mgr = Arc::new(SessionManager::new(app_data_dir));
       app.manage(Arc::clone(&session_mgr));
+      app.manage(agent_office::AgentOfficeState::default());
+      app.manage(muse_telemetry::MuseTelemetryState::default());
 
       #[cfg(desktop)]
       {
@@ -790,6 +806,7 @@ pub fn run() {
       append_group_shared_context,
       upsert_external_agent,
       delete_external_agent,
+      test_external_agent_connection,
       update_group_workflow,
       reset_group_thread_binding,
       get_site_adapters,
@@ -805,6 +822,10 @@ pub fn run() {
       stop_lan_sync_share,
       pull_lan_sync_share,
       scan_sync_qr_code,
+      agent_office::render_agent_office_frame,
+      muse_telemetry::start_muse_agent_telemetry,
+      muse_telemetry::get_muse_agent_telemetry,
+      muse_telemetry::stop_muse_agent_telemetry,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")

@@ -18,7 +18,10 @@
   "bundle": {
     "active": true,
     "shortDescription": "AI 助手账号切换器",
-    "targets": ["dmg", "nsis"],
+    "targets": [
+      "dmg",
+      "nsis"
+    ],
     "macOS": {
       "minimumSystemVersion": "14.0"
     },
@@ -41,6 +44,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "THIRD_PARTY_NOTICES.txt"
     ]
   }
 }

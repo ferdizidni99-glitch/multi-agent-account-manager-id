@@ -1,0 +1,94 @@
+name: Upgrade Checks
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-checks-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+  windows-test-installer:
+    name: Build isolated Windows test installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          $nsisPath = Join-Path "${env:ProgramFiles(x86)}" "NSIS"
+          if (Test-Path $nsisPath) {
+            Add-Content -Path $env:GITHUB_PATH -Value $nsisPath
+          }
+      - run: npm ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Muse gateway bridge dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller pip-licenses
+          python -m pip install "git+https://github.com/nikships/muse-cli.git@ddd01678eae7d6dc3309ef9991fb90938ac0f6c1"
+          python -c "import muse_cli.gateway"
+      - name: Test read-only Muse telemetry bridge
+        shell: pwsh
+        run: python -m unittest discover -s src-tauri/sidecar -p "test_*.py"
+      - name: Package Muse VM telemetry bridge
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --onefile --name muse-agent-bridge --collect-all muse_cli --collect-all curl_cffi --collect-all noise --collect-all google.protobuf src-tauri/sidecar/muse_agent_bridge.py
+          New-Item -ItemType Directory -Force -Path "src-tauri/sidecars" | Out-Null
+          Copy-Item "dist/muse-agent-bridge.exe" "src-tauri/sidecars/muse-agent-bridge.exe" -Force
+          pip-licenses --format=json --with-license-file --with-notice-file --no-license-path | Out-File "src-tauri/sidecars/THIRD_PARTY_PYTHON_LICENSES.txt" -Encoding utf8
+      - name: Build test-only installer
+        run: npm run tauri build -- --config src-tauri/tauri.test.conf.json --bundles nsis
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS setup installer was not produced." }
+          $hash = Get-FileHash $installer.FullName -Algorithm SHA256
+          "$($hash.Hash)  $($installer.Name)" | Out-File "$($installer.FullName).sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Duohao-Windows-Test-Installer
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*.sha256
+          if-no-files-found: error
+          retention-days: 14

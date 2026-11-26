@@ -173,6 +173,60 @@ export interface AccountPageError {
   message: string;
 }
 
+export interface AccountHealthResult {
+  providerId: ProviderId;
+  uuid: string;
+  status: "not_checked" | "checking" | "healthy" | "needs_auth" | "attention" | "unverified";
+  checkedAtMs: number | null;
+  authVerified: boolean;
+  quotaVerified: boolean;
+  message: string;
+}
+
+export interface AgentConnectionTestResult {
+  id: string;
+  status: string;
+  checkedAtMs: number;
+  latencyMs: number;
+  statusCode: number | null;
+  message: string;
+}
+
+export interface MuseTelemetrySchedule {
+  id: string;
+  title: string;
+  mode: string | null;
+  enabled: boolean;
+  scheduleKey: string | null;
+  nextRunAtUtc: number | null;
+  timezone: string | null;
+  cadence: string | null;
+}
+
+export interface MuseTelemetryRun {
+  runId: string | null;
+  jobId: string | null;
+  status: string;
+  triggerReason: string | null;
+  scheduledForUtc: number | null;
+  startedAtUtc: number | null;
+  finishedAtUtc: number | null;
+}
+
+export interface MuseAgentTelemetry {
+  type: "snapshot" | "status" | "subscription" | "task_event";
+  accountKey: AccountKey;
+  status: string;
+  checkedAtMs: number;
+  vmId?: string | null;
+  message?: string | null;
+  schedules?: MuseTelemetrySchedule[];
+  runs?: MuseTelemetryRun[];
+  recentEvent?: Record<string, string | number>;
+  event?: Record<string, string | number>;
+  subscriptionStatus?: string;
+}
+
 export interface ManagerSnapshot {
   platform: string;
   providers: ProviderInfo[];
@@ -193,6 +247,7 @@ export interface ManagerSnapshot {
   activeGroupId: string | null;
   externalAgents: ExternalAgentRecord[];
   accountErrors?: AccountPageError[];
+  accountHealth?: AccountHealthResult[];
   officialRelayUrl?: string | null;
 }
 

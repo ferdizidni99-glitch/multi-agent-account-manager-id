@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
+import { buildAgentOfficeRoster, renderAgentCenter } from "./features/control-center";
 import type {
   AccountKey,
   AccountRecord,
+  AgentConnectionTestResult,
   DownloadNoticeEvent,
   ExternalAgentKind,
   ExternalAgentRecord,
@@ -17,6 +19,7 @@ import type {
   InstallUpdateOutcome,
   LanSyncShareInfo,
   ManagerSnapshot,
+  MuseAgentTelemetry,
   ProviderId,
   ProviderInfo,
   ProxyTestResult,
@@ -231,6 +234,7 @@ const ICON_PIN = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" st
 const ICON_SYNC = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>`;
 const ICON_QR_SCAN = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" x2="17" y1="12" y2="12"/></svg>`;
 const syncingMsgIds = new Set<string>();
+let agentConnectionResults: Record<string, AgentConnectionTestResult> = {};
 
 const THEME_STORAGE_KEY = "maam_theme_mode";
 const systemDarkQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -292,11 +296,113 @@ systemDarkQuery.addEventListener("change", () => {
   }
 });
 
+let museTelemetryByAccount: Record<string, MuseAgentTelemetry> = {};
+const museTelemetryStarted = new Set<string>();
+const museTelemetryStarting = new Set<string>();
+const museTelemetryLastAttemptAt = new Map<string, number>();
+
+function museTelemetryKey(uuid: string): string {
+  return "muse:" + uuid;
+}
+
+function recordMuseTelemetry(event: MuseAgentTelemetry): void {
+  if (!event.accountKey || event.accountKey.providerId !== "muse") return;
+  const key = museTelemetryKey(event.accountKey.uuid);
+  const previous = museTelemetryByAccount[key];
+  if (event.type === "subscription") {
+    if (previous) {
+      museTelemetryByAccount[key] = {
+        ...previous,
+        subscriptionStatus: event.status,
+        checkedAtMs: Math.max(previous.checkedAtMs || 0, event.checkedAtMs || 0)
+      };
+    }
+  } else if (event.type === "task_event") {
+    const base = previous || {
+      type: "status" as const,
+      accountKey: event.accountKey,
+      status: "connected",
+      checkedAtMs: event.checkedAtMs || Date.now()
+    };
+    museTelemetryByAccount[key] = {
+      ...base,
+      recentEvent: event.event || {},
+      checkedAtMs: Math.max(base.checkedAtMs || 0, event.checkedAtMs || 0)
+    };
+  } else {
+    museTelemetryByAccount[key] = event;
+    if (event.type === "status" && event.status === "bridge_stopped") {
+      museTelemetryStarted.delete(event.accountKey.uuid);
+      museTelemetryLastAttemptAt.delete(event.accountKey.uuid);
+    }
+  }
+
+  if (event.type === "status" && event.status === "bridge_stopped" && snapshot) {
+    museTelemetryStarted.delete(event.accountKey.uuid);
+    museTelemetryLastAttemptAt.delete(event.accountKey.uuid);
+    void syncMuseTelemetryAccounts(snapshot, true);
+  }
+  if (viewMode === "agents" && snapshot) {
+    saveScrollPosition();
+    render();
+    restoreScrollPosition();
+  }
+}
+
+async function syncMuseTelemetryAccounts(
+  state: ManagerSnapshot,
+  startMissing: boolean
+): Promise<void> {
+  const accounts = state.accounts.filter((account) => account.providerId === "muse");
+  const eligible = new Set(accounts
+    .filter((account) => account.authState !== "logged_out")
+    .map((account) => account.uuid));
+
+  for (const uuid of [...museTelemetryStarted]) {
+    if (eligible.has(uuid)) continue;
+    museTelemetryStarted.delete(uuid);
+    museTelemetryLastAttemptAt.delete(uuid);
+    delete museTelemetryByAccount[museTelemetryKey(uuid)];
+    void invoke("stop_muse_agent_telemetry", { uuid }).catch(() => undefined);
+  }
+
+  if (!startMissing) return;
+  for (const account of accounts) {
+    if (account.authState === "logged_out") continue;
+    const uuid = account.uuid;
+    if (museTelemetryStarted.has(uuid) || museTelemetryStarting.has(uuid)) continue;
+    const lastAttempt = museTelemetryLastAttemptAt.get(uuid) || 0;
+    if (Date.now() - lastAttempt < 60_000) continue;
+
+    museTelemetryStarting.add(uuid);
+    museTelemetryLastAttemptAt.set(uuid, Date.now());
+    try {
+      await invoke("start_muse_agent_telemetry", { uuid });
+      museTelemetryStarted.add(uuid);
+    } catch {
+      museTelemetryByAccount[museTelemetryKey(uuid)] = {
+        type: "status",
+        accountKey: { providerId: "muse", uuid },
+        status: "attention",
+        checkedAtMs: Date.now(),
+        message: "Konektor VM belum dapat dimulai. Periksa sesi Muse dan build telemetry."
+      };
+      if (viewMode === "agents") {
+        saveScrollPosition();
+        render();
+        restoreScrollPosition();
+      }
+    } finally {
+      museTelemetryStarting.delete(uuid);
+    }
+  }
+}
+
 let snapshot: ManagerSnapshot | null = null;
 let modal: ModalMode = { kind: "none" };
 let optimisticSwitching: AccountKey | null = null;
 let busy = false;
-let viewMode: "provider" | "groups" = "provider";
+let viewMode: "provider" | "groups" | "agents" = "provider";
 let lastGroupListScroll = 0;
 let shouldAnimateModal = false;
 let modalOverlayScrollTop = 0;
@@ -360,6 +466,75 @@ const updateState: {
 
 const scrollOffsets: Record<string, number> = {};
 
+interface AgentOfficeFrameResponse {
+  dataUrl: string;
+  width: number;
+  height: number;
+  agentCount: number;
+}
+
+let agentOfficeTimer: number | undefined;
+let agentOfficeRequestInFlight = false;
+
+function stopAgentOfficePolling(): void {
+  if (agentOfficeTimer !== undefined) {
+    window.clearTimeout(agentOfficeTimer);
+    agentOfficeTimer = undefined;
+  }
+}
+
+async function refreshAgentOfficeFrame(): Promise<void> {
+  if (viewMode !== "agents" || !snapshot) {
+    stopAgentOfficePolling();
+    return;
+  }
+  if (agentOfficeRequestInFlight) return;
+  const canvas = document.querySelector<HTMLCanvasElement>("#agent-office-canvas");
+  if (!canvas) {
+    stopAgentOfficePolling();
+    return;
+  }
+  agentOfficeRequestInFlight = true;
+  const bounds = canvas.getBoundingClientRect();
+  const width = Math.max(480, Math.min(1280, Math.round(bounds.width || 760)));
+  const height = Math.max(280, Math.min(760, Math.round(bounds.height || 420)));
+  try {
+    const frame = await invoke<AgentOfficeFrameResponse>("render_agent_office_frame", {
+      agents: buildAgentOfficeRoster(snapshot, museTelemetryByAccount),
+      width,
+      height
+    });
+    const image = new Image();
+    image.onload = () => {
+      const target = document.querySelector<HTMLCanvasElement>("#agent-office-canvas");
+      if (!target || viewMode !== "agents") return;
+      target.width = frame.width;
+      target.height = frame.height;
+      const context = target.getContext("2d");
+      if (!context) return;
+      context.imageSmoothingEnabled = false;
+      context.clearRect(0, 0, frame.width, frame.height);
+      context.drawImage(image, 0, 0, frame.width, frame.height);
+      const status = document.querySelector<HTMLElement>("#agent-office-render-status");
+      if (status) status.textContent = frame.agentCount + " agent · scene diperbarui";
+    };
+    image.src = frame.dataUrl;
+  } catch (error) {
+    const status = document.querySelector<HTMLElement>("#agent-office-render-status");
+    if (status) status.textContent = "Mesin visual belum tersedia: " + String(error);
+  } finally {
+    agentOfficeRequestInFlight = false;
+    if (viewMode === "agents") {
+      stopAgentOfficePolling();
+      agentOfficeTimer = window.setTimeout(() => {
+        agentOfficeTimer = undefined;
+        void refreshAgentOfficeFrame();
+      }, 200);
+    }
+  }
+}
+
+
 function isSameKey(a: AccountKey | null, b: AccountRecord): boolean {
   return Boolean(a && a.providerId === b.providerId && a.uuid === b.uuid);
 }
@@ -376,6 +551,9 @@ function syncViewModeFromSnapshot(state: ManagerSnapshot | null): void {
   if (!state) return;
   if (isMobilePlatform(state.platform)) {
     viewMode = "provider";
+    return;
+  }
+  if (viewMode === "agents") {
     return;
   }
   if (state.activeGroupId) {
@@ -4254,6 +4432,7 @@ function render(): void {
   
   const isMobile = isMobilePlatform(snapshot.platform);
   const isGroupsView = !isMobile && viewMode === "groups";
+  const isControlView = !isMobile && viewMode === "agents";
   const anyGroupNeedsAuth = snapshot.groupChats.some(groupHasNeedsAuth);
 
   if (isMobile) {
@@ -4295,7 +4474,7 @@ function render(): void {
             ${snapshot.providers
               .map(
                 (p) => `
-                <button class="rail-btn ${!isGroupsView && p.id === provider.id ? "active" : ""} ${!p.enabled ? "disabled" : ""}" data-provider="${escapeHtml(p.id)}" title="${escapeHtml(p.name)}" type="button">
+                <button class="rail-btn ${viewMode === "provider" && p.id === provider.id ? "active" : ""} ${!p.enabled ? "disabled" : ""}" data-provider="${escapeHtml(p.id)}" title="${escapeHtml(p.name)}" type="button">
                   <div class="rail-logo-box">${renderProviderLogo(p, "rail-logo-img")}</div>
                   <span class="rail-label">${escapeHtml(p.shortName)}</span>
                   ${!p.enabled ? `<span class="rail-pending-tag">待接入</span>` : ""}
@@ -4303,6 +4482,13 @@ function render(): void {
               `
               )
               .join("")}
+          </div>
+          <div class="rail-control-tools">
+            <div class="rail-divider"></div>
+            <button id="agent-center-rail-btn" class="rail-btn ${viewMode === "agents" ? "active" : ""}" title="Agent Center · tim dan workspace" type="button">
+              <div class="rail-logo-box rail-control-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="7" width="14" height="13" rx="3"/><path d="M9 7V5a3 3 0 0 1 6 0v2M9 13h.01M15 13h.01M9 17h6"/></svg></div>
+              <span class="rail-label">Agents</span>
+            </button>
           </div>
           <div class="rail-footer">
           ${maamLanguageSelectorHtml()}
@@ -4346,10 +4532,13 @@ function render(): void {
             </button>
           </div>
         </aside>
-        <section class="middle-column">
-          ${isGroupsView ? renderGroupMiddleContent(snapshot, provider) : renderMiddleContent(snapshot, provider)}
-        </section>
-        ${isGroupsView ? renderGroupRightStage(snapshot) : renderRightStage(snapshot, provider)}
+        ${isControlView
+          ? `<main class="control-center-shell">${renderAgentCenter(snapshot, agentConnectionResults, museTelemetryByAccount)}</main>`
+          : `<section class="middle-column">
+              ${isGroupsView ? renderGroupMiddleContent(snapshot, provider) : renderMiddleContent(snapshot, provider)}
+            </section>
+            ${isGroupsView ? renderGroupRightStage(snapshot) : renderRightStage(snapshot, provider)}`
+        }
       </div>
     `;
     applyMaamLocalization();
@@ -4357,6 +4546,12 @@ function render(): void {
   }
 
   bindEvents(snapshot, provider);
+  if (!isMobile && viewMode === "agents") {
+    void syncMuseTelemetryAccounts(snapshot, true);
+    void refreshAgentOfficeFrame();
+  } else {
+    stopAgentOfficePolling();
+  }
   if (accountInputSelection) {
     const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
       `#${accountInputSelection.id}`
@@ -4380,6 +4575,13 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     viewMode = "groups";
     const targetId = state.activeGroupId ?? state.groupChats[0]?.id ?? null;
     await callCommand("select_group_chat", { groupId: targetId });
+  });
+
+  document.querySelector("#agent-center-rail-btn")?.addEventListener("click", async () => {
+    if (viewMode === "agents") return;
+    if (modal.kind !== "none") await setModal({ kind: "none" });
+    viewMode = "agents";
+    render();
   });
 
   document.querySelectorAll<HTMLElement>("[data-provider]").forEach((btn) => {
@@ -4409,6 +4611,49 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
   document
     .querySelector("#open-external-agents-from-group-btn")
     ?.addEventListener("click", handleOpenExternalAgents);
+
+  document.querySelector("#agent-manage-btn")?.addEventListener("click", handleOpenExternalAgents);
+  document.querySelector("#agent-manage-inline-btn")?.addEventListener("click", handleOpenExternalAgents);
+  document.querySelector("#agent-create-workspace-btn")?.addEventListener("click", async () => {
+    await openCreateGroupModal(state);
+  });
+  document.querySelectorAll<HTMLElement>("[data-open-agent-workspace]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const groupId = button.dataset.openAgentWorkspace;
+      if (!groupId) return;
+      if (modal.kind !== "none") await setModal({ kind: "none" });
+      viewMode = "groups";
+      if (groupId === state.activeGroupId) {
+        render();
+        return;
+      }
+      await callCommand("select_group_chat", { groupId });
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-test-ext-agent-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const agentId = btn.dataset.testExtAgentId;
+      if (!agentId || btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = "Menguji…";
+      try {
+        const result = await invoke<AgentConnectionTestResult>("test_external_agent_connection", { agentId });
+        agentConnectionResults[agentId] = result;
+      } catch (error) {
+        agentConnectionResults[agentId] = {
+          id: agentId,
+          status: "error",
+          checkedAtMs: Date.now(),
+          latencyMs: 0,
+          statusCode: null,
+          message: String(error)
+        };
+      } finally {
+        rerenderPreservingScroll();
+      }
+    });
+  });
 
   document.querySelectorAll<HTMLElement>("[data-open-ext-agent-id]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -6681,6 +6926,15 @@ function groupModalVisualSignature(s: ManagerSnapshot): string {
 }
 
 async function bootstrap(): Promise<void> {
+  await listen<MuseAgentTelemetry>("muse-agent-telemetry", (event) => {
+    recordMuseTelemetry(event.payload);
+  });
+  try {
+    const initialTelemetry = await invoke<MuseAgentTelemetry[]>("get_muse_agent_telemetry");
+    for (const item of initialTelemetry) recordMuseTelemetry(item);
+  } catch {
+    // Telemetry bridge may not be bundled in development or on unsupported platforms.
+  }
   await listen<ManagerSnapshot>("manager-state-changed", (event) => {
     const prevSnapshot = snapshot;
     const nextSnapshot = event.payload;
@@ -6695,6 +6949,7 @@ async function bootstrap(): Promise<void> {
       if (snapshot.activeAccount || !snapshot.switchingAccount) {
         optimisticSwitching = null;
       }
+      void syncMuseTelemetryAccounts(nextSnapshot, true);
       return;
     }
     saveScrollPosition();
@@ -6705,6 +6960,7 @@ async function bootstrap(): Promise<void> {
     }
     render();
     restoreScrollPosition();
+    void syncMuseTelemetryAccounts(nextSnapshot, true);
   });
 
   await listen<DownloadNoticeEvent>("download-event", (event) => {
@@ -6835,6 +7091,7 @@ async function bootstrap(): Promise<void> {
   snapshot = await invoke<ManagerSnapshot>("get_manager_state");
   syncViewModeFromSnapshot(snapshot);
   render();
+  void syncMuseTelemetryAccounts(snapshot, true);
   setTimeout(() => {
     void runCheckForUpdates(true);
   }, 3000);
