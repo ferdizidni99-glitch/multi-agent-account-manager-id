@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
-import { renderAgentCenter, renderSmartRouter } from "./features/control-center";
+import { buildAgentOfficeRoster, renderAgentCenter } from "./features/control-center";
 import type {
   AccountKey,
   AccountRecord,
@@ -299,7 +299,7 @@ let snapshot: ManagerSnapshot | null = null;
 let modal: ModalMode = { kind: "none" };
 let optimisticSwitching: AccountKey | null = null;
 let busy = false;
-let viewMode: "provider" | "groups" | "router" | "agents" = "provider";
+let viewMode: "provider" | "groups" | "agents" = "provider";
 let lastGroupListScroll = 0;
 let shouldAnimateModal = false;
 let modalOverlayScrollTop = 0;
@@ -363,6 +363,75 @@ const updateState: {
 
 const scrollOffsets: Record<string, number> = {};
 
+interface AgentOfficeFrameResponse {
+  dataUrl: string;
+  width: number;
+  height: number;
+  agentCount: number;
+}
+
+let agentOfficeTimer: number | undefined;
+let agentOfficeRequestInFlight = false;
+
+function stopAgentOfficePolling(): void {
+  if (agentOfficeTimer !== undefined) {
+    window.clearTimeout(agentOfficeTimer);
+    agentOfficeTimer = undefined;
+  }
+}
+
+async function refreshAgentOfficeFrame(): Promise<void> {
+  if (viewMode !== "agents" || !snapshot) {
+    stopAgentOfficePolling();
+    return;
+  }
+  if (agentOfficeRequestInFlight) return;
+  const canvas = document.querySelector<HTMLCanvasElement>("#agent-office-canvas");
+  if (!canvas) {
+    stopAgentOfficePolling();
+    return;
+  }
+  agentOfficeRequestInFlight = true;
+  const bounds = canvas.getBoundingClientRect();
+  const width = Math.max(480, Math.min(1280, Math.round(bounds.width || 760)));
+  const height = Math.max(280, Math.min(760, Math.round(bounds.height || 420)));
+  try {
+    const frame = await invoke<AgentOfficeFrameResponse>("render_agent_office_frame", {
+      agents: buildAgentOfficeRoster(snapshot),
+      width,
+      height
+    });
+    const image = new Image();
+    image.onload = () => {
+      const target = document.querySelector<HTMLCanvasElement>("#agent-office-canvas");
+      if (!target || viewMode !== "agents") return;
+      target.width = frame.width;
+      target.height = frame.height;
+      const context = target.getContext("2d");
+      if (!context) return;
+      context.imageSmoothingEnabled = false;
+      context.clearRect(0, 0, frame.width, frame.height);
+      context.drawImage(image, 0, 0, frame.width, frame.height);
+      const status = document.querySelector<HTMLElement>("#agent-office-render-status");
+      if (status) status.textContent = frame.agentCount + " agent · scene diperbarui";
+    };
+    image.src = frame.dataUrl;
+  } catch (error) {
+    const status = document.querySelector<HTMLElement>("#agent-office-render-status");
+    if (status) status.textContent = "Mesin visual belum tersedia: " + String(error);
+  } finally {
+    agentOfficeRequestInFlight = false;
+    if (viewMode === "agents") {
+      stopAgentOfficePolling();
+      agentOfficeTimer = window.setTimeout(() => {
+        agentOfficeTimer = undefined;
+        void refreshAgentOfficeFrame();
+      }, 1200);
+    }
+  }
+}
+
+
 function isSameKey(a: AccountKey | null, b: AccountRecord): boolean {
   return Boolean(a && a.providerId === b.providerId && a.uuid === b.uuid);
 }
@@ -381,7 +450,7 @@ function syncViewModeFromSnapshot(state: ManagerSnapshot | null): void {
     viewMode = "provider";
     return;
   }
-  if (viewMode === "router" || viewMode === "agents") {
+  if (viewMode === "agents") {
     return;
   }
   if (state.activeGroupId) {
@@ -4260,7 +4329,7 @@ function render(): void {
   
   const isMobile = isMobilePlatform(snapshot.platform);
   const isGroupsView = !isMobile && viewMode === "groups";
-  const isControlView = !isMobile && (viewMode === "router" || viewMode === "agents");
+  const isControlView = !isMobile && viewMode === "agents";
   const anyGroupNeedsAuth = snapshot.groupChats.some(groupHasNeedsAuth);
 
   if (isMobile) {
@@ -4313,10 +4382,6 @@ function render(): void {
           </div>
           <div class="rail-control-tools">
             <div class="rail-divider"></div>
-            <button id="smart-router-rail-btn" class="rail-btn ${viewMode === "router" ? "active" : ""}" title="Smart Router · kondisi dan kelayakan akun" type="button">
-              <div class="rail-logo-box rail-control-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M4 17h16M13 7l3-3m-3 3 3 3M9 17l-3-3m3 3-3 3"/></svg></div>
-              <span class="rail-label">Router</span>
-            </button>
             <button id="agent-center-rail-btn" class="rail-btn ${viewMode === "agents" ? "active" : ""}" title="Agent Center · tim dan workspace" type="button">
               <div class="rail-logo-box rail-control-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="7" width="14" height="13" rx="3"/><path d="M9 7V5a3 3 0 0 1 6 0v2M9 13h.01M15 13h.01M9 17h6"/></svg></div>
               <span class="rail-label">Agents</span>
@@ -4365,7 +4430,7 @@ function render(): void {
           </div>
         </aside>
         ${isControlView
-          ? `<main class="control-center-shell">${viewMode === "router" ? renderSmartRouter(snapshot) : renderAgentCenter(snapshot, agentConnectionResults)}</main>`
+          ? `<main class="control-center-shell">${renderAgentCenter(snapshot, agentConnectionResults)}</main>`
           : `<section class="middle-column">
               ${isGroupsView ? renderGroupMiddleContent(snapshot, provider) : renderMiddleContent(snapshot, provider)}
             </section>
@@ -4378,6 +4443,11 @@ function render(): void {
   }
 
   bindEvents(snapshot, provider);
+  if (!isMobile && viewMode === "agents") {
+    void refreshAgentOfficeFrame();
+  } else {
+    stopAgentOfficePolling();
+  }
   if (accountInputSelection) {
     const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
       `#${accountInputSelection.id}`
@@ -4403,17 +4473,11 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
     await callCommand("select_group_chat", { groupId: targetId });
   });
 
-  const openControlView = async (target: "router" | "agents") => {
-    if (viewMode === target) return;
+  document.querySelector("#agent-center-rail-btn")?.addEventListener("click", async () => {
+    if (viewMode === "agents") return;
     if (modal.kind !== "none") await setModal({ kind: "none" });
-    viewMode = target;
+    viewMode = "agents";
     render();
-  };
-  document.querySelector("#smart-router-rail-btn")?.addEventListener("click", () => {
-    void openControlView("router");
-  });
-  document.querySelector("#agent-center-rail-btn")?.addEventListener("click", () => {
-    void openControlView("agents");
   });
 
   document.querySelectorAll<HTMLElement>("[data-provider]").forEach((btn) => {
@@ -4448,9 +4512,6 @@ function bindEvents(state: ManagerSnapshot, provider: ProviderInfo): void {
   document.querySelector("#agent-manage-inline-btn")?.addEventListener("click", handleOpenExternalAgents);
   document.querySelector("#agent-create-workspace-btn")?.addEventListener("click", async () => {
     await openCreateGroupModal(state);
-  });
-  document.querySelector("#router-refresh-btn")?.addEventListener("click", async () => {
-    await callCommand("trigger_quota_sync", {});
   });
   document.querySelectorAll<HTMLElement>("[data-open-agent-workspace]").forEach((button) => {
     button.addEventListener("click", async () => {
