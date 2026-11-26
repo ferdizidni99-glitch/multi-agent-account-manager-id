@@ -54,6 +54,25 @@ jobs:
             Add-Content -Path $env:GITHUB_PATH -Value $nsisPath
           }
       - run: npm ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Muse gateway bridge dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip pyinstaller pip-licenses
+          python -m pip install "git+https://github.com/nikships/muse-cli.git@ddd01678eae7d6dc3309ef9991fb90938ac0f6c1"
+          python -c "import muse_cli.gateway"
+      - name: Test read-only Muse telemetry bridge
+        shell: pwsh
+        run: python -m unittest discover -s src-tauri/sidecar -p "test_*.py"
+      - name: Package Muse VM telemetry bridge
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --onefile --name muse-agent-bridge --collect-all muse_cli --collect-all curl_cffi --collect-all noise --collect-all google.protobuf src-tauri/sidecar/muse_agent_bridge.py
+          New-Item -ItemType Directory -Force -Path "src-tauri/sidecars" | Out-Null
+          Copy-Item "dist/muse-agent-bridge.exe" "src-tauri/sidecars/muse-agent-bridge.exe" -Force
+          pip-licenses --format=plain --with-urls --with-description | Out-File "src-tauri/sidecars/THIRD_PARTY_PYTHON_LICENSES.txt" -Encoding utf8
       - name: Build test-only installer
         run: npm run tauri build -- --config src-tauri/tauri.test.conf.json --bundles nsis
       - name: Generate SHA-256 checksum
