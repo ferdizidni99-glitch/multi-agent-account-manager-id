@@ -181,3 +181,68 @@ fn non_empty_text(value: &str, fallback: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() { fallback.to_string() } else { trimmed.chars().take(72).collect() }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maam_agent_lifecycle_is_accepted_by_pixtuoid() {
+        let mut office = Office::journey(17).expect("Pixtuoid office should initialize");
+        let mut runtime = AgentOfficeRuntime {
+            office,
+            agents: HashMap::new(),
+        };
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after the Unix epoch")
+            .as_secs_f64()
+            * 1_000.0;
+
+        sync_agents(
+            &mut runtime,
+            vec![AgentOfficeInput {
+                id: "account:muse:primary".to_string(),
+                name: "Muse Main".to_string(),
+                state: "running".to_string(),
+                detail: "Research task".to_string(),
+            }],
+            now_ms,
+        )
+        .expect("Pixtuoid should accept MAAM SessionStart and PreToolUse events");
+
+        assert_eq!(runtime.agents.len(), 1);
+        assert!(runtime.agents.values().next().expect("one tracked agent").task.is_some());
+
+        sync_agents(
+            &mut runtime,
+            vec![AgentOfficeInput {
+                id: "account:muse:primary".to_string(),
+                name: "Muse Main".to_string(),
+                state: "idle".to_string(),
+                detail: "Muse".to_string(),
+            }],
+            now_ms + 1_500.0,
+        )
+        .expect("Pixtuoid should accept MAAM PostToolUse and Stop events");
+
+        assert!(runtime.agents.values().next().expect("agent remains in roster").task.is_none());
+
+        sync_agents(&mut runtime, Vec::new(), now_ms + 3_000.0)
+            .expect("Pixtuoid should accept MAAM SessionEnd events");
+        assert!(runtime.agents.is_empty());
+
+        let _ = runtime.office.step(now_ms + 4_000.0, 900, 520);
+        assert!(runtime.office.frame_len() > 0);
+    }
+
+    #[test]
+    fn stable_agent_ids_and_safe_slugs_are_deterministic() {
+        assert_eq!(stable_session_id("account:muse:primary"), stable_session_id("account:muse:primary"));
+        assert_ne!(stable_session_id("account:muse:primary"), stable_session_id("account:muse:secondary"));
+        assert_eq!(safe_slug("Muse Main / One"), "MuseMainOne");
+        assert_eq!(safe_slug("///"), "agent");
+        assert_eq!(non_empty_text("  ", "fallback"), "fallback");
+    }
+}
