@@ -5317,7 +5317,6 @@ impl SessionManager {
   /// Read the Muse session cookie from the account's existing WebView profile.
   /// The cookie is returned only to the in-process telemetry launcher; it is
   /// never persisted, copied to the frontend, or written to logs.
-  #[cfg(desktop)]
   pub async fn muse_telemetry_cookie_header(
     &self,
     app: &AppHandle,
