@@ -263,11 +263,11 @@ function museTaskEventStatus(telemetry: MuseAgentTelemetry | undefined, schedule
           ? event.type.toLowerCase()
           : "";
   if (["running", "in_progress", "inprogress", "queued", "pending", "started", "starting", "working", "processing", "executing", "active"].includes(status)
-    || /task\\.(started|running|queued|progress)|task_(started|running|queued|progress)/.test(eventName)) return "running";
+    || /task\.(started|running|queued|progress)|task_(started|running|queued|progress)/.test(eventName)) return "running";
   if (["failed", "error", "cancelled", "canceled", "timed_out", "timeout"].includes(status)
-    || /task\\.(failed|error|cancelled)|task_(failed|error|cancelled)/.test(eventName)) return "attention";
+    || /task\.(failed|error|cancelled)|task_(failed|error|cancelled)/.test(eventName)) return "attention";
   if (["completed", "complete", "success", "succeeded", "done", "finished"].includes(status)
-    || /task\\.(completed|complete|success|succeeded|done|finished)|task_(completed|success|done)/.test(eventName)) return "idle";
+    || /task\.(completed|complete|success|succeeded|done|finished)|task_(completed|success|done)/.test(eventName)) return "idle";
   return null;
 }
 
@@ -356,7 +356,7 @@ export function buildAgentOfficeRoster(
       snapshotActiveRun?.jobId === recentEventJobId &&
       (recentEventAttention ||
         ["completed", "complete", "success", "succeeded", "done", "finished"].includes(recentEventStatus) ||
-        /task\\.(completed|complete|success|succeeded|done|finished)/.test(recentEventName))
+        /task\.(completed|complete|success|succeeded|done|finished)/.test(recentEventName))
     );
     const activeRun = eventMarksActiveRunTerminal ? undefined : snapshotActiveRun;
     const eventSchedule = recentEventJobId
