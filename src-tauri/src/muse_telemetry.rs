@@ -212,5 +212,9 @@ pub fn stop_muse_agent_telemetry(
         let _ = worker.child.kill();
         let _ = worker.child.wait();
     }
+    drop(workers);
+    if let Ok(mut latest) = telemetry.latest.lock() {
+        latest.remove(&account_id);
+    }
     Ok(())
 }
