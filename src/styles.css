@@ -4372,3 +4372,16 @@ body,
 @media(max-width:1100px){.agent-office-layout{grid-template-columns:minmax(0,1fr)}.agent-office-side-panel{max-height:none}.agent-office-roster{max-height:270px}.agent-office-scene-panel{min-height:430px}.agent-office-canvas-wrap,.agent-office-canvas-wrap canvas{min-height:330px}}
 @media(max-width:760px){.agent-office-page{padding:18px 12px 24px}.agent-office-header{align-items:flex-start;flex-direction:column}.agent-office-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.agent-office-stats article{padding:10px 11px}.agent-office-scene-panel{min-height:370px}.agent-office-canvas-wrap,.agent-office-canvas-wrap canvas{min-height:280px}.agent-office-page .cc-header-actions{width:100%}.agent-office-page .cc-header-actions .btn{flex:1}}
 @media(max-width:480px){.agent-office-stats{gap:7px}.agent-office-stats article strong{font-size:20px}.agent-office-scene-panel{padding:10px}.agent-office-scene-footer{font-size:9px}}
+
+
+.agent-office-schedules-panel{padding:15px}
+.agent-office-schedule-list{display:flex;flex-direction:column;gap:0}
+.agent-office-schedule-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 5px;border-bottom:1px solid var(--border)}
+.agent-office-schedule-row:last-child{border-bottom:none}
+.agent-office-schedule-main{min-width:0;display:flex;flex-direction:column;gap:4px}
+.agent-office-schedule-main strong{font-size:11.5px;font-weight:700;color:var(--text-main);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-office-schedule-main span{font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent-office-schedule-next{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none}
+.agent-office-schedule-next>span{font-size:10px;color:var(--text-sub);font-variant-numeric:tabular-nums;text-align:right}
+.agent-office-schedule-next small{font-size:9px}
+@media(max-width:520px){.agent-office-schedule-row{align-items:flex-start;flex-direction:column;gap:7px}.agent-office-schedule-next{align-items:flex-start}.agent-office-schedule-next>span{text-align:left}}
