@@ -214,7 +214,7 @@ export interface MuseTelemetryRun {
 }
 
 export interface MuseAgentTelemetry {
-  type: "snapshot" | "status" | "subscription";
+  type: "snapshot" | "status" | "subscription" | "task_event";
   accountKey: AccountKey;
   status: string;
   checkedAtMs: number;
@@ -222,6 +222,7 @@ export interface MuseAgentTelemetry {
   message?: string | null;
   schedules?: MuseTelemetrySchedule[];
   runs?: MuseTelemetryRun[];
+  recentEvent?: Record<string, string | number>;
 }
 
 export interface ManagerSnapshot {
