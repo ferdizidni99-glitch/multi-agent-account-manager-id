@@ -6954,7 +6954,7 @@ async function bootstrap(): Promise<void> {
     }
     render();
     restoreScrollPosition();
-    void syncMuseTelemetryAccounts(nextSnapshot, viewMode === "agents");
+    void syncMuseTelemetryAccounts(nextSnapshot, true);
   });
 
   await listen<DownloadNoticeEvent>("download-event", (event) => {
