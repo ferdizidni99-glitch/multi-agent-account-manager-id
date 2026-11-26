@@ -138,7 +138,6 @@ def poll_snapshots(cookies: str, stop: threading.Event) -> None:
             emit({
                 "type": "status",
                 "status": "connected",
-                "vmId": clean_text(gateway.vm_id, 100),
                 "checkedAtMs": int(time.time() * 1000),
             })
             backoff = 3
