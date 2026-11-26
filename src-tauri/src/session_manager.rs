@@ -160,9 +160,6 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
       authCheck.status = 'invalid';
       authCheck.reason = String(reason || 'unauthorized');
       authCheck.checkedAt = Date.now();
-      healthCheck.status = 'invalid';
-      healthCheck.reason = authCheck.reason;
-      healthCheck.checkedAt = authCheck.checkedAt;
       window.__maamQuota = null;
       window.__maamQuotaDetail = null;
       try {
@@ -174,9 +171,16 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
       authCheck.status = 'ok';
       authCheck.reason = '';
       authCheck.checkedAt = Date.now();
+    };
+    const markHealthInvalid = (reason) => {
+      healthCheck.status = 'invalid';
+      healthCheck.reason = String(reason || 'unauthorized');
+      healthCheck.checkedAt = Date.now();
+    };
+    const markHealthOk = () => {
       healthCheck.status = 'ok';
       healthCheck.reason = '';
-      healthCheck.checkedAt = authCheck.checkedAt;
+      healthCheck.checkedAt = Date.now();
     };
     const BAD_EMAIL_RE = /^(?:support|privacy|help|legal|press|noreply|no-reply|info|security|contact|abuse|feedback|sales|terms|hello|team|admin|postmaster|notifications)@/i;
     const EMAIL_STRICT_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
@@ -498,6 +502,7 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
           });
           if (r1 && r1.status === 401) {
             markAuthInvalid('client_version_401');
+            markHealthInvalid('client_version_401');
             return;
           }
           if (r1 && r1.ok) {
@@ -510,11 +515,13 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
             });
             if (r2 && (r2.status === 401 || r2.status === 403)) {
               markAuthInvalid('auth_check_' + r2.status);
+              markHealthInvalid('auth_check_' + r2.status);
               return;
             }
             if (r2 && r2.ok) {
               try { r2.clone().text().then(inspectText).catch(() => {}); } catch (_) {}
               markAuthOk();
+              markHealthOk();
               return;
             }
           }
@@ -532,11 +539,13 @@ const LOGIN_CAPTURE_INIT_JS: &str = r#"(() => {
           });
           if (r && r.status === 401) {
             markAuthInvalid('hark_profile_401');
+            markHealthInvalid('hark_profile_401');
             return;
           }
           if (r && r.ok) {
             try { r.clone().text().then(inspectText).catch(() => {}); } catch (_) {}
             markAuthOk();
+            markHealthOk();
             return;
           }
           healthCheck.status = 'error';
