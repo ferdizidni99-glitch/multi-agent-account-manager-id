@@ -366,7 +366,9 @@ function renderMuseSchedules(state: ManagerSnapshot, telemetryByAccount: Record<
     '<section class="agent-office-bottom-panel agent-office-schedules-panel">',
     '<div class="agent-office-bottom-heading"><div><span class="cc-eyebrow">MUSE VM / SCHEDULER</span><h2>Jadwal dan eksekusi</h2></div>',
     '<span class="cc-count">', String(rows.length), ' jadwal · ', String(connectedCount), ' VM terhubung</span></div>',
-    rows.length ? '<div class="agent-office-schedule-list">' + rows.join("") + '</div>' : '<div class="cc-empty">', emptyText, '</div>',
+    rows.length
+      ? '<div class="agent-office-schedule-list">' + rows.join("") + '</div>'
+      : '<div class="cc-empty">' + escapeHtml(emptyText) + '</div>',
     '<p class="cc-note">Data dibaca langsung dari layanan jadwal Muse. MAAM hanya memantau; menjalankan, mengubah, atau menghapus jadwal tetap dilakukan di Muse.</p>',
     '</section>'
   ].join("");
