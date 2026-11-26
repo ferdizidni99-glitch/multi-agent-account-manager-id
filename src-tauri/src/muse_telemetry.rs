@@ -26,6 +26,19 @@ impl MuseTelemetryState {
         format!("muse:{}", uuid)
     }
 
+    /// Stop child bridge processes before the application event loop exits.
+    /// This also releases reader threads blocked on the child stdout pipe.
+    pub fn shutdown(&self) {
+        if let Ok(mut workers) = self.workers.lock() {
+            for (_, mut worker) in workers.drain() {
+                let _ = writeln!(worker.stdin, "{{\\"type\\":\\"stop\\"}}");
+                let _ = worker.stdin.flush();
+                let _ = worker.child.kill();
+                let _ = worker.child.wait();
+            }
+        }
+    }
+
     fn latest_snapshots(&self) -> Result<Vec<Value>, String> {
         let latest = self.latest.lock().map_err(|_| "Muse telemetry state is unavailable".to_string())?;
         Ok(latest.values().cloned().collect())
