@@ -92,8 +92,11 @@ pub async fn start_muse_agent_telemetry(
     child_stdin.write_all(b"\n")
         .and_then(|_| child_stdin.flush())
         .map_err(|_| "Gagal memulai Muse telemetry bridge".to_string())?;
-    let stdout = child.stdout.take()
-        .ok_or_else(|| "Muse telemetry bridge tidak menghasilkan output".to_string())?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("Muse telemetry bridge tidak menghasilkan output".to_string());
+    };
 
     {
         let mut workers = telemetry.workers.lock()
@@ -112,10 +115,7 @@ pub async fn start_muse_agent_telemetry(
     let core_account_id = account_id.clone();
     let core_uuid = uuid.clone();
     let app_for_reader = app.clone();
-    let latest_state = app.state::<MuseTelemetryState>();
-    // Tauri State is borrow-scoped; the managed value itself remains alive for
-    // the app lifetime, so capture the app handle and re-resolve it per event.
-    drop(latest_state);
+    // Resolve managed state again from the app handle inside the reader thread.
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
@@ -128,7 +128,7 @@ pub async fn start_muse_agent_telemetry(
                 "uuid": core_uuid
             }));
             let event_type = object.get("type").and_then(Value::as_str).unwrap_or("");
-            if matches!(event_type, "snapshot" | "status" | "subscription") {
+            if matches!(event_type, "snapshot" | "status") {
                 if let Some(state) = app_for_reader.try_state::<MuseTelemetryState>() {
                     if let Ok(mut latest) = state.latest.lock() {
                         latest.insert(core_account_id.clone(), event.clone());
