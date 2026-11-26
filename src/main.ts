@@ -19,6 +19,7 @@ import type {
   InstallUpdateOutcome,
   LanSyncShareInfo,
   ManagerSnapshot,
+  MuseAgentTelemetry,
   ProviderId,
   ProviderInfo,
   ProxyTestResult,
@@ -295,6 +296,95 @@ systemDarkQuery.addEventListener("change", () => {
   }
 });
 
+let museTelemetryByAccount: Record<string, MuseAgentTelemetry> = {};
+const museTelemetryStarted = new Set<string>();
+const museTelemetryStarting = new Set<string>();
+const museTelemetryLastAttemptAt = new Map<string, number>();
+
+function museTelemetryKey(uuid: string): string {
+  return "muse:" + uuid;
+}
+
+function recordMuseTelemetry(event: MuseAgentTelemetry): void {
+  if (!event.accountKey || event.accountKey.providerId !== "muse") return;
+  const key = museTelemetryKey(event.accountKey.uuid);
+  const previous = museTelemetryByAccount[key];
+  if (event.type === "subscription") {
+    if (previous) {
+      museTelemetryByAccount[key] = {
+        ...previous,
+        subscriptionStatus: event.status,
+        checkedAtMs: Math.max(previous.checkedAtMs || 0, event.checkedAtMs || 0)
+      };
+    }
+  } else if (event.type === "task_event") {
+    if (previous) {
+      museTelemetryByAccount[key] = {
+        ...previous,
+        recentEvent: event.event || {},
+        checkedAtMs: Math.max(previous.checkedAtMs || 0, event.checkedAtMs || 0)
+      };
+    }
+  } else {
+    museTelemetryByAccount[key] = event;
+  }
+
+  if (viewMode === "agents" && snapshot) {
+    saveScrollPosition();
+    render();
+    restoreScrollPosition();
+  }
+}
+
+async function syncMuseTelemetryAccounts(
+  state: ManagerSnapshot,
+  startMissing: boolean
+): Promise<void> {
+  const accounts = state.accounts.filter((account) => account.providerId === "muse");
+  const eligible = new Set(accounts
+    .filter((account) => account.authState !== "logged_out")
+    .map((account) => account.uuid));
+
+  for (const uuid of [...museTelemetryStarted]) {
+    if (eligible.has(uuid)) continue;
+    museTelemetryStarted.delete(uuid);
+    museTelemetryLastAttemptAt.delete(uuid);
+    delete museTelemetryByAccount[museTelemetryKey(uuid)];
+    void invoke("stop_muse_agent_telemetry", { uuid }).catch(() => undefined);
+  }
+
+  if (!startMissing) return;
+  for (const account of accounts) {
+    if (account.authState === "logged_out") continue;
+    const uuid = account.uuid;
+    if (museTelemetryStarted.has(uuid) || museTelemetryStarting.has(uuid)) continue;
+    const lastAttempt = museTelemetryLastAttemptAt.get(uuid) || 0;
+    if (Date.now() - lastAttempt < 60_000) continue;
+
+    museTelemetryStarting.add(uuid);
+    museTelemetryLastAttemptAt.set(uuid, Date.now());
+    try {
+      await invoke("start_muse_agent_telemetry", { uuid });
+      museTelemetryStarted.add(uuid);
+    } catch {
+      museTelemetryByAccount[museTelemetryKey(uuid)] = {
+        type: "status",
+        accountKey: { providerId: "muse", uuid },
+        status: "attention",
+        checkedAtMs: Date.now(),
+        message: "Konektor VM belum dapat dimulai. Periksa sesi Muse dan build telemetry."
+      };
+      if (viewMode === "agents") {
+        saveScrollPosition();
+        render();
+        restoreScrollPosition();
+      }
+    } finally {
+      museTelemetryStarting.delete(uuid);
+    }
+  }
+}
+
 let snapshot: ManagerSnapshot | null = null;
 let modal: ModalMode = { kind: "none" };
 let optimisticSwitching: AccountKey | null = null;
@@ -397,7 +487,7 @@ async function refreshAgentOfficeFrame(): Promise<void> {
   const height = Math.max(280, Math.min(760, Math.round(bounds.height || 420)));
   try {
     const frame = await invoke<AgentOfficeFrameResponse>("render_agent_office_frame", {
-      agents: buildAgentOfficeRoster(snapshot),
+      agents: buildAgentOfficeRoster(snapshot, museTelemetryByAccount),
       width,
       height
     });
@@ -4430,7 +4520,7 @@ function render(): void {
           </div>
         </aside>
         ${isControlView
-          ? `<main class="control-center-shell">${renderAgentCenter(snapshot, agentConnectionResults)}</main>`
+          ? `<main class="control-center-shell">${renderAgentCenter(snapshot, agentConnectionResults, museTelemetryByAccount)}</main>`
           : `<section class="middle-column">
               ${isGroupsView ? renderGroupMiddleContent(snapshot, provider) : renderMiddleContent(snapshot, provider)}
             </section>
@@ -4444,6 +4534,7 @@ function render(): void {
 
   bindEvents(snapshot, provider);
   if (!isMobile && viewMode === "agents") {
+    void syncMuseTelemetryAccounts(snapshot, true);
     void refreshAgentOfficeFrame();
   } else {
     stopAgentOfficePolling();
@@ -6822,6 +6913,15 @@ function groupModalVisualSignature(s: ManagerSnapshot): string {
 }
 
 async function bootstrap(): Promise<void> {
+  await listen<MuseAgentTelemetry>("muse-agent-telemetry", (event) => {
+    recordMuseTelemetry(event.payload);
+  });
+  try {
+    const initialTelemetry = await invoke<MuseAgentTelemetry[]>("get_muse_agent_telemetry");
+    for (const item of initialTelemetry) recordMuseTelemetry(item);
+  } catch {
+    // Telemetry bridge may not be bundled in development or on unsupported platforms.
+  }
   await listen<ManagerSnapshot>("manager-state-changed", (event) => {
     const prevSnapshot = snapshot;
     const nextSnapshot = event.payload;
@@ -6846,9 +6946,10 @@ async function bootstrap(): Promise<void> {
     }
     render();
     restoreScrollPosition();
+    void syncMuseTelemetryAccounts(nextSnapshot, viewMode === "agents");
   });
 
-  await listen<DownloadNoticeEvent>("download-event", (event) => {
+  await listen<DownloadNoticeEvent("download-event", (event) => {
     downloadToast = event.payload;
     clearDownloadToastTimer();
     rerenderPreservingScroll();
