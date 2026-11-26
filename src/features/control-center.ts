@@ -286,7 +286,7 @@ export function buildAgentOfficeRoster(
       ? telemetry?.runs?.find((run) => museTaskStatus(run) === "attention")
       : undefined;
     const telemetryAttention = telemetry?.status === "needs_auth" || telemetry?.status === "attention";
-    const telemetryUnavailable = telemetry?.status === "unavailable";
+    const telemetryUnavailable = telemetry?.status === "unavailable" || telemetry?.status === "bridge_stopped";
     const activeDetail = activeRun
       ? "VM · " + (activeSchedule?.title || "Tugas terjadwal")
       : null;
