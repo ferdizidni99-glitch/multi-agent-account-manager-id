@@ -58,9 +58,11 @@ pub fn render_agent_office_frame(
     let fit = runtime.office.fit(width, height);
     if fit.len() != 4 { return Err("Pixtuoid mengembalikan ukuran frame yang tidak valid".to_string()); }
     let _written = runtime.office.step(now_ms, width, height);
-    let scale = runtime.office.scale();
-    let frame_width = fit[0].saturating_mul(scale);
-    let frame_height = fit[1].saturating_mul(scale);
+    // Pixtuoid's fit() result is [layout_width, layout_height, pixel_scale, upscale].
+    // frame_size() is the authoritative device-pixel dimension used by step().
+    let (frame_width_u16, frame_height_u16) = runtime.office.frame_size(width, height);
+    let frame_width = u32::from(frame_width_u16);
+    let frame_height = u32::from(frame_height_u16);
     let frame_len = runtime.office.frame_len();
     let expected_len = (frame_width as usize).checked_mul(frame_height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
