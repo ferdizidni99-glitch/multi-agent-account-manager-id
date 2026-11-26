@@ -234,7 +234,7 @@ export interface AgentOfficeInput {
 
 function museTaskStatus(run: MuseTelemetryRun | undefined): "running" | "attention" | "idle" {
   const status = (run?.status || "").toLowerCase().replace(/[^a-z_]/g, "");
-  if (["running", "in_progress", "inprogress", "queued", "pending", "started", "working", "processing"].includes(status)) return "running";
+  if (["running", "in_progress", "inprogress", "queued", "pending", "started", "starting", "waiting", "working", "processing", "executing", "active"].includes(status)) return "running";
   if (["failed", "error", "cancelled", "canceled", "timed_out", "timeout"].includes(status)) return "attention";
   return "idle";
 }
