@@ -327,12 +327,19 @@ function recordMuseTelemetry(event: MuseAgentTelemetry): void {
     }
   } else {
     museTelemetryByAccount[key] = event;
+    if (event.type === "status" && event.status === "bridge_stopped") {
+      museTelemetryStarted.delete(event.accountKey.uuid);
+      museTelemetryLastAttemptAt.delete(event.accountKey.uuid);
+    }
   }
 
   if (viewMode === "agents" && snapshot) {
     saveScrollPosition();
     render();
     restoreScrollPosition();
+    if (event.type === "status" && event.status === "bridge_stopped") {
+      void syncMuseTelemetryAccounts(snapshot, true);
+    }
   }
 }
 
