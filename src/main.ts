@@ -426,7 +426,7 @@ async function refreshAgentOfficeFrame(): Promise<void> {
       agentOfficeTimer = window.setTimeout(() => {
         agentOfficeTimer = undefined;
         void refreshAgentOfficeFrame();
-      }, 1200);
+      }, 200);
     }
   }
 }
