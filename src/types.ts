@@ -192,6 +192,38 @@ export interface AgentConnectionTestResult {
   message: string;
 }
 
+export interface MuseTelemetrySchedule {
+  id: string;
+  title: string;
+  mode: string | null;
+  enabled: boolean;
+  scheduleKey: string | null;
+  nextRunAtUtc: number | null;
+  timezone: string | null;
+  cadence: string | null;
+}
+
+export interface MuseTelemetryRun {
+  runId: string | null;
+  jobId: string | null;
+  status: string;
+  triggerReason: string | null;
+  scheduledForUtc: number | null;
+  startedAtUtc: number | null;
+  finishedAtUtc: number | null;
+}
+
+export interface MuseAgentTelemetry {
+  type: "snapshot" | "status" | "subscription";
+  accountKey: AccountKey;
+  status: string;
+  checkedAtMs: number;
+  vmId?: string | null;
+  message?: string | null;
+  schedules?: MuseTelemetrySchedule[];
+  runs?: MuseTelemetryRun[];
+}
+
 export interface ManagerSnapshot {
   platform: string;
   providers: ProviderInfo[];
