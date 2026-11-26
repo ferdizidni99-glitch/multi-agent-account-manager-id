@@ -1,4 +1,11 @@
 {
   "productName": "叠号 测试版",
-  "identifier": "com.ldjx.accountmanager.devtest"
+  "identifier": "com.ldjx.accountmanager.devtest",
+  "bundle": {
+    "resources": [
+      "THIRD_PARTY_NOTICES.txt",
+      "sidecars/muse-agent-bridge.exe",
+      "sidecars/THIRD_PARTY_PYTHON_LICENSES.txt"
+    ]
+  }
 }
