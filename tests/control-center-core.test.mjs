@@ -27,11 +27,20 @@ function snapshot(overrides = {}) {
   };
 }
 
-test("session cookie and unknown quota do not create a false blocker", () => {
+test("unknown quota is visible as unverified rather than ready", () => {
   const result = assessAccount(snapshot(), account(), now);
+  assert.equal(result.status, "attention");
+  assert.equal(result.eligible, false);
+  assert.match(result.reasonText, /kuota belum terverifikasi/);
+});
+
+test("a known non-depleted quota can be diagnostically ready", () => {
+  const result = assessAccount(snapshot(), account({
+    quotaText: "Sisa kuota 80%",
+    quotaPercent: 80
+  }), now);
   assert.equal(result.status, "ready");
   assert.equal(result.eligible, true);
-  assert.deepEqual(result.reasons, []);
 });
 
 test("logged out accounts need authentication", () => {
