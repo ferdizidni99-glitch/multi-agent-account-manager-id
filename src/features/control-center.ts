@@ -1,4 +1,4 @@
-import type { AccountRecord, ExternalAgentRecord, GroupChatMessage, GroupChatRecord, ManagerSnapshot } from "../types";
+import type { AccountHealthResult, AccountRecord, AgentConnectionTestResult, ExternalAgentRecord, GroupChatMessage, GroupChatRecord, ManagerSnapshot } from "../types";
 import { assessAccount, summarizeAgentCenter, summarizeRouter } from "./control-center-core.mjs";
 
 function escapeHtml(value: unknown): string {
@@ -63,8 +63,27 @@ function quotaLabel(account: AccountRecord): string {
   return "Belum ada data kuota";
 }
 
+function liveHealthLabel(result: AccountHealthResult | undefined): string {
+  if (!result || result.status === "not_checked") return "Belum diperiksa";
+  if (result.status === "checking") return "Sedang diperiksa";
+  if (result.status === "healthy") return result.quotaVerified ? "Token + kuota terverifikasi" : "Token terverifikasi";
+  if (result.status === "needs_auth") return "Perlu login ulang";
+  if (result.status === "attention") return "Ada kendala";
+  return "Belum terverifikasi";
+}
+
+function liveHealthClass(result: AccountHealthResult | undefined): string {
+  if (result?.status === "healthy") return "is-ready";
+  if (result?.status === "needs_auth") return "is-auth";
+  if (result?.status === "checking") return "is-busy";
+  return "is-attention";
+}
+
 function renderRouterRow(state: ManagerSnapshot, account: AccountRecord, now: number): string {
   const assessment = assessAccount(state, account, now);
+  const liveHealth = (state.accountHealth || []).find((item) =>
+    item.providerId === account.providerId && item.uuid === account.uuid
+  );
   const provider = state.providers.find((item) => item.id === account.providerId);
   const expiry = typeof account.cookieExpiresAtMs === "number"
     ? formatDate(account.cookieExpiresAtMs)
@@ -74,6 +93,9 @@ function renderRouterRow(state: ManagerSnapshot, account: AccountRecord, now: nu
     '<td><div class="cc-account-name">', escapeHtml(accountLabel(state, account)), '</div><div class="cc-subtle">',
     escapeHtml(provider?.shortName || account.providerId), ' · ', escapeHtml(account.uuid.slice(0, 8)), '</div></td>',
     '<td><span class="cc-status ', statusClass(assessment.status), '">', escapeHtml(statusLabel(assessment.status)), '</span></td>',
+    '<td><span class="cc-status ', liveHealthClass(liveHealth), '">', escapeHtml(liveHealthLabel(liveHealth)), '</span><div class="cc-subtle">',
+    escapeHtml(liveHealth?.checkedAtMs ? formatDate(liveHealth.checkedAtMs) : "Belum ada waktu pemeriksaan"), '</div><div class="cc-subtle">',
+    escapeHtml(liveHealth?.message || "Perlu WebView warm untuk pemeriksaan endpoint"), '</div></td>',
     '<td>', escapeHtml(quotaLabel(account)), '</td>',
     '<td>', escapeHtml(expiry), '</td>',
     '<td class="cc-reason">', escapeHtml(assessment.reasonText), '</td>',
@@ -90,7 +112,7 @@ export function renderSmartRouter(state: ManagerSnapshot): string {
     ? '<div class="cc-alert"><strong>Routing ditahan:</strong> selesaikan konflik UUID di daftar akun terlebih dahulu. Mekanisme Group Chat yang lama memang menolak dispatch selama konflik masih ada.</div>'
     : "";
   const accountTable = state.accounts.length
-    ? '<div class="cc-table-wrap"><table class="cc-table"><thead><tr><th>Akun</th><th>Status</th><th>Indikator kuota</th><th>Cookie</th><th>Catatan eligibility</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+    ? '<div class="cc-table-wrap"><table class="cc-table"><thead><tr><th>Akun</th><th>Eligibility snapshot</th><th>Pemeriksaan live</th><th>Indikator kuota</th><th>Cookie</th><th>Catatan eligibility</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
     : '<div class="cc-empty">Belum ada akun. Tambahkan akun melalui tab provider di sisi kiri.</div>';
 
   return [
@@ -112,7 +134,7 @@ export function renderSmartRouter(state: ManagerSnapshot): string {
     '<div class="cc-flow-arrow">→</div>',
     '<div class="cc-flow-step"><span>03</span><strong>Selection</strong><small>Prioritas kuota, pemakaian terakhir, sticky route</small></div>',
     '</div>',
-    '<p class="cc-note">Tombol refresh meminta SessionManager memverifikasi autentikasi dan memperbarui kuota melalui WebView yang sedang warm (terbuka atau berada di warm pool), bukan seluruh akun tersimpan. Hasil diperbarui secara asynchronous setelah probe selesai. Status sibuk di panel ini hanya indikatif karena lock dan reservation internal tidak diekspos ke snapshot; cooldown, lock, failover, serta pemilihan final tetap diputuskan backend.</p>',
+    '<p class="cc-note">Pemeriksaan live memakai endpoint autentikasi provider dari WebView yang sedang warm. Akun yang tidak warm tetap berstatus “Belum diperiksa” dan tidak dianggap sehat. Token dan kuota dilaporkan terpisah: token dapat terverifikasi meski refresh kuota belum berhasil. Hasil diperbarui asynchronous dari SessionManager. Eligibility snapshot tetap diagnostik; cooldown, lock, failover, serta pemilihan final tetap diputuskan backend.</p>',
     '</section>',
     '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">ACCOUNT RESOURCE POOL</div><h2>Kondisi akun</h2></div><span class="cc-count">', String(summary.total), ' akun</span></div>',
     accountTable,
@@ -130,13 +152,35 @@ function agentSecondary(agent: ExternalAgentRecord): string {
   return agent.command || "Command belum diisi";
 }
 
-function renderAgentCard(agent: ExternalAgentRecord): string {
+function agentTestLabel(result: AgentConnectionTestResult | undefined): string {
+  if (!result) return "Belum dites";
+  const labels: Record<string, string> = {
+    healthy: "Terhubung", auth_error: "API key ditolak", rate_limited: "Rate limit",
+    server_error: "Server error", http_error: "HTTP error", unreachable: "Tidak terjangkau",
+    timeout: "Timeout", not_found: "CLI tidak ditemukan", command_error: "CLI gagal",
+    configuration_error: "Konfigurasi belum lengkap", error: "Gagal dites"
+  };
+  return labels[result.status] || result.status;
+}
+
+function agentTestClass(result: AgentConnectionTestResult | undefined): string {
+  if (result?.status === "healthy") return "is-ready";
+  if (result?.status === "auth_error" || result?.status === "configuration_error" || result?.status === "not_found" || result?.status === "command_error") return "is-auth";
+  if (result) return "is-attention";
+  return "is-busy";
+}
+
+function renderAgentCard(agent: ExternalAgentRecord, result?: AgentConnectionTestResult): string {
   return [
     '<article class="cc-agent-card">',
     '<div class="cc-agent-mark ', agent.kind === "openai_api" ? "mark-api" : "mark-cli", '">', agent.kind === "openai_api" ? "API" : ">_", '</div>',
-    '<div class="cc-agent-card-main"><strong>', escapeHtml(agent.name), '</strong><span>', escapeHtml(agentSecondary(agent)), '</span></div>',
+    '<div class="cc-agent-card-main"><strong>', escapeHtml(agent.name), '</strong><span>', escapeHtml(agentSecondary(agent)), '</span>',
+    '<span class="cc-status ', agentTestClass(result), '">', escapeHtml(agentTestLabel(result)), '</span>',
+    result ? '<small class="cc-subtle">' + escapeHtml(result.message) + ' · ' + escapeHtml(formatDate(result.checkedAtMs)) + ' · ' + String(result.latencyMs) + ' ms</small>' : '',
+    '</div>',
     '<span class="cc-pill">', agentKindLabel(agent), '</span>',
-    '<button class="cc-icon-action" data-open-ext-agent-id="', escapeHtml(agent.id), '" type="button" aria-label="Edit ', escapeHtml(agent.name), '">Edit</button>',
+    '<div class="cc-agent-card-actions"><button class="btn small" data-test-ext-agent-id="', escapeHtml(agent.id), '" type="button">Tes koneksi</button>',
+    '<button class="cc-icon-action" data-open-ext-agent-id="', escapeHtml(agent.id), '" type="button" aria-label="Edit ', escapeHtml(agent.name), '">Edit</button></div>',
     '</article>'
   ].join("");
 }
@@ -181,11 +225,14 @@ function renderActivity(state: ManagerSnapshot): string {
   }).join("") + '</div>';
 }
 
-export function renderAgentCenter(state: ManagerSnapshot): string {
+export function renderAgentCenter(
+  state: ManagerSnapshot,
+  connectionResults: Record<string, AgentConnectionTestResult> = {}
+): string {
   const summary = summarizeAgentCenter(state);
   const externalAgents = state.externalAgents || [];
   const agentCards = externalAgents.length
-    ? externalAgents.map(renderAgentCard).join("")
+    ? externalAgents.map((agent) => renderAgentCard(agent, connectionResults[agent.id])).join("")
     : '<div class="cc-empty">Belum ada API / CLI agent. Tambahkan lewat pengelola agent yang sudah ada.</div>';
   const workspaces = state.groupChats.length
     ? state.groupChats.map(renderWorkspaceCard).join("")
@@ -204,7 +251,7 @@ export function renderAgentCenter(state: ManagerSnapshot): string {
     '</section>',
     '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">AGENT REGISTRY</div><h2>Agent yang sudah terdaftar</h2></div><button id="agent-manage-inline-btn" class="cc-text-action" type="button">Buka pengelola →</button></div>',
     '<div class="cc-agent-grid">', agentCards, '</div>',
-    '<p class="cc-note">Profil API / CLI di sini hanya menampilkan registry dan konfigurasi tersimpan; belum melakukan tes koneksi API/CLI. Daftar workspace adalah Group Chat yang sudah ada, bukan task scheduler baru. Akun Muse / Hark tetap dikelola di tab provider; tidak ada kredensial yang disalin ke profil baru.</p>',
+    '<p class="cc-note">Tes API mengirim GET ke endpoint /models memakai API key tersimpan bila tersedia; ini menguji endpoint dan autentikasi, bukan menjalankan inferensi. Tes CLI menjalankan executable dengan argumen --version; ini memastikan program dapat dijalankan, bukan memverifikasi login provider. Workspace tetap memakai Group Chat yang sudah ada, bukan task scheduler baru.</p>',
     '</section>',
     '<section class="cc-panel"><div class="cc-panel-heading"><div><div class="cc-eyebrow">TEAM WORKSPACES</div><h2>Ruang kolaborasi</h2></div><span class="cc-count">', String(summary.workspaces), ' workspace</span></div>',
     '<div class="cc-workspace-grid">', workspaces, '</div>',
