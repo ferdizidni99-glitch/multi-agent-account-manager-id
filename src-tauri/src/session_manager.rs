@@ -5314,6 +5314,67 @@ impl SessionManager {
     Ok(Self::snapshot_from_locked(&locked))
   }
 
+  /// Read the Muse session cookie from the account's existing WebView profile.
+  /// The cookie is returned only to the in-process telemetry launcher; it is
+  /// never persisted, copied to the frontend, or written to logs.
+  #[cfg(desktop)]
+  pub async fn muse_telemetry_cookie_header(
+    &self,
+    app: &AppHandle,
+    raw_uuid: &str,
+  ) -> Result<String, String> {
+    let uuid = normalize_uuid(raw_uuid).ok_or_else(|| "UUID akun Muse tidak valid".to_string())?;
+    let key = AccountKey {
+      provider_id: ProviderId::muse(),
+      uuid: uuid.clone(),
+    };
+    let locked = self.inner.lock().await;
+    if !locked.conflicts.is_empty() {
+      return Err("Selesaikan konflik UUID sebelum membaca sesi Muse".to_string());
+    }
+    if !locked.store.accounts.iter().any(|account| {
+      account.provider_id == key.provider_id && account.uuid == key.uuid
+    }) {
+      return Err("Akun Muse tidak ditemukan di MAAM".to_string());
+    }
+    let url = Url::parse("https://muse.ai/").map_err(|_| "URL Muse tidak valid".to_string())?;
+
+    #[cfg(windows)]
+    let cookie_result = self.read_windows_cookies_for_url(app, &locked, &key, url).await;
+
+    #[cfg(target_os = "macos")]
+    let cookie_result = {
+      drop(locked);
+      let parsed_uuid = Uuid::parse_str(&key.uuid).map_err(|_| "Profil akun Muse tidak valid".to_string())?;
+      platform::read_macos_cookies_for_url(app, parsed_uuid, url).await
+    };
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+      drop(locked);
+      let _ = (app, url);
+      return Err("Konektor VM Muse saat ini tersedia untuk Windows dan macOS".to_string());
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+      #[cfg(windows)]
+      drop(locked);
+      let (header, summary) = cookie_result?;
+      self.apply_cookie_expiry_summary(app, &key, summary).await;
+      let has_hatch_session = header.split(';').any(|part| {
+        let Some((name, value)) = part.trim().split_once('=') else {
+          return false;
+        };
+        name.trim() == "hatch_sess" && !value.trim().is_empty()
+      });
+      if !has_hatch_session {
+        return Err("Sesi Muse tidak memiliki hatch_sess yang masih berlaku. Login ulang akun Muse di MAAM.".to_string());
+      }
+      Ok(header)
+    }
+  }
+
   pub async fn copy_account_cookie(
     &self,
     app: &AppHandle,
