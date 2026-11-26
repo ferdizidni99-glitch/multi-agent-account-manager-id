@@ -1,5 +1,6 @@
 mod group_transport;
 mod agent_office;
+mod muse_telemetry;
 mod platform;
 mod providers;
 mod session_manager;
@@ -659,6 +660,7 @@ pub fn run() {
       let session_mgr = Arc::new(SessionManager::new(app_data_dir));
       app.manage(Arc::clone(&session_mgr));
       app.manage(agent_office::AgentOfficeState::default());
+      app.manage(muse_telemetry::MuseTelemetryState::default());
 
       #[cfg(desktop)]
       {
@@ -821,6 +823,9 @@ pub fn run() {
       pull_lan_sync_share,
       scan_sync_qr_code,
       agent_office::render_agent_office_frame,
+      muse_telemetry::start_muse_agent_telemetry,
+      muse_telemetry::get_muse_agent_telemetry,
+      muse_telemetry::stop_muse_agent_telemetry,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")
