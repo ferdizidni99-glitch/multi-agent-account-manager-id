@@ -239,7 +239,53 @@ function museTaskStatus(run: MuseTelemetryRun | undefined): "running" | "attenti
   return "idle";
 }
 
+function museTaskEventStatus(telemetry: MuseAgentTelemetry | undefined, scheduleId?: string): "running" | "attention" | "idle" | null {
+  const event = telemetry?.recentEvent;
+  if (!event) return null;
+  const jobId = typeof event.job_id === "string"
+    ? event.job_id
+    : typeof event.jobId === "string"
+      ? event.jobId
+      : typeof event.task_id === "string"
+        ? event.task_id
+        : typeof event.taskId === "string"
+          ? event.taskId
+          : "";
+  if (scheduleId && jobId !== scheduleId) return null;
+  const status = typeof event.status === "string" ? event.status.toLowerCase().replace(/[^a-z_]/g, "") : "";
+  const eventName = typeof event.event_name === "string"
+    ? event.event_name.toLowerCase()
+    : typeof event.eventName === "string"
+      ? event.eventName.toLowerCase()
+      : typeof event.event === "string"
+        ? event.event.toLowerCase()
+        : typeof event.type === "string"
+          ? event.type.toLowerCase()
+          : "";
+  if (["running", "in_progress", "inprogress", "queued", "pending", "started", "starting", "working", "processing", "executing", "active"].includes(status)
+    || /task\\.(started|running|queued|progress)|task_(started|running|queued|progress)/.test(eventName)) return "running";
+  if (["failed", "error", "cancelled", "canceled", "timed_out", "timeout"].includes(status)
+    || /task\\.(failed|error|cancelled)|task_(failed|error|cancelled)/.test(eventName)) return "attention";
+  if (["completed", "complete", "success", "succeeded", "done", "finished"].includes(status)
+    || /task\\.(completed|complete|success|succeeded|done|finished)|task_(completed|success|done)/.test(eventName)) return "idle";
+  return null;
+}
+
 function telemetryRunForSchedule(telemetry: MuseAgentTelemetry | undefined, scheduleId: string): MuseTelemetryRun | undefined {
+  const eventState = museTaskEventStatus(telemetry, scheduleId);
+  if (eventState) {
+    const event = telemetry?.recentEvent || {};
+    const eventRunId = typeof event.run_id === "string" ? event.run_id : typeof event.runId === "string" ? event.runId : null;
+    return {
+      runId: eventRunId,
+      jobId: scheduleId,
+      status: eventState === "running" ? "running" : eventState === "attention" ? "failed" : "completed",
+      triggerReason: null,
+      scheduledForUtc: null,
+      startedAtUtc: null,
+      finishedAtUtc: null
+    };
+  }
   return telemetry?.runs?.find((run) => run.jobId === scheduleId);
 }
 
@@ -304,7 +350,15 @@ export function buildAgentOfficeRoster(
       || /task\.(started|running|queued|progress)|task_(started|running|queued|progress)/.test(recentEventName);
     const recentEventAttention = ["failed", "error", "cancelled", "canceled", "timed_out", "timeout"].includes(recentEventStatus)
       || /task\.(failed|error|cancelled)|task_(failed|error|cancelled)/.test(recentEventName);
-    const activeRun = telemetry?.runs?.find((run) => museTaskStatus(run) === "running");
+    const snapshotActiveRun = telemetry?.runs?.find((run) => museTaskStatus(run) === "running");
+    const eventMarksActiveRunTerminal = Boolean(
+      recentEventJobId &&
+      snapshotActiveRun?.jobId === recentEventJobId &&
+      (recentEventAttention ||
+        ["completed", "complete", "success", "succeeded", "done", "finished"].includes(recentEventStatus) ||
+        /task\\.(completed|complete|success|succeeded|done|finished)/.test(recentEventName))
+    );
+    const activeRun = eventMarksActiveRunTerminal ? undefined : snapshotActiveRun;
     const eventSchedule = recentEventJobId
       ? telemetry?.schedules?.find((schedule) => schedule.id === recentEventJobId)
       : undefined;
