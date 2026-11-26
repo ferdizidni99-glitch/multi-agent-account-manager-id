@@ -6936,6 +6936,7 @@ async function bootstrap(): Promise<void> {
       if (snapshot.activeAccount || !snapshot.switchingAccount) {
         optimisticSwitching = null;
       }
+      void syncMuseTelemetryAccounts(nextSnapshot, viewMode === "agents");
       return;
     }
     saveScrollPosition();
@@ -6949,7 +6950,7 @@ async function bootstrap(): Promise<void> {
     void syncMuseTelemetryAccounts(nextSnapshot, viewMode === "agents");
   });
 
-  await listen<DownloadNoticeEvent("download-event", (event) => {
+  await listen<DownloadNoticeEvent>("download-event", (event) => {
     downloadToast = event.payload;
     clearDownloadToastTimer();
     rerenderPreservingScroll();
