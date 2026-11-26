@@ -31,3 +31,43 @@ jobs:
         with:
           workspaces: ./src-tauri
       - run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+  windows-test-installer:
+    name: Build isolated Windows test installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          $nsisPath = Join-Path $env:ProgramFiles(x86) "NSIS"
+          if (Test-Path $nsisPath) {
+            Add-Content -Path $env:GITHUB_PATH -Value $nsisPath
+          }
+      - run: npm ci
+      - name: Build test-only installer
+        run: npm run tauri build -- --config src-tauri/tauri.test.conf.json --bundles nsis
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS setup installer was not produced." }
+          $hash = Get-FileHash $installer.FullName -Algorithm SHA256
+          "$($hash.Hash)  $($installer.Name)" | Out-File "$($installer.FullName).sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Duohao-Windows-Test-Installer
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*.sha256
+          if-no-files-found: error
+          retention-days: 14
