@@ -318,13 +318,17 @@ function recordMuseTelemetry(event: MuseAgentTelemetry): void {
       };
     }
   } else if (event.type === "task_event") {
-    if (previous) {
-      museTelemetryByAccount[key] = {
-        ...previous,
-        recentEvent: event.event || {},
-        checkedAtMs: Math.max(previous.checkedAtMs || 0, event.checkedAtMs || 0)
-      };
-    }
+    const base = previous || {
+      type: "status" as const,
+      accountKey: event.accountKey,
+      status: "connected",
+      checkedAtMs: event.checkedAtMs || Date.now()
+    };
+    museTelemetryByAccount[key] = {
+      ...base,
+      recentEvent: event.event || {},
+      checkedAtMs: Math.max(base.checkedAtMs || 0, event.checkedAtMs || 0)
+    };
   } else {
     museTelemetryByAccount[key] = event;
     if (event.type === "status" && event.status === "bridge_stopped") {
@@ -333,13 +337,15 @@ function recordMuseTelemetry(event: MuseAgentTelemetry): void {
     }
   }
 
+  if (event.type === "status" && event.status === "bridge_stopped" && snapshot) {
+    museTelemetryStarted.delete(event.accountKey.uuid);
+    museTelemetryLastAttemptAt.delete(event.accountKey.uuid);
+    void syncMuseTelemetryAccounts(snapshot, true);
+  }
   if (viewMode === "agents" && snapshot) {
     saveScrollPosition();
     render();
     restoreScrollPosition();
-    if (event.type === "status" && event.status === "bridge_stopped") {
-      void syncMuseTelemetryAccounts(snapshot, true);
-    }
   }
 }
 
